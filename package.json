@@ -1,6 +1,6 @@
 {
   "name": "contextgateway-edge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Privacy-first MCP edge policy and observability gateway",
   "type": "module",
@@ -13,6 +13,7 @@
     "test": "vitest run",
     "smoke:production": "node scripts/smoke-production.mjs",
     "smoke:capabilities": "node scripts/smoke-capabilities.mjs",
+    "smoke:capability-required": "node scripts/smoke-capability-required.mjs",
     "db:info": "wrangler d1 info mcp-context",
     "db:migrate:local": "wrangler d1 migrations apply mcp-context --local",
     "db:migrate:remote": "wrangler d1 migrations apply mcp-context --remote"
