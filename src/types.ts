@@ -55,6 +55,8 @@ export interface Env {
 
 export type Plan = "free" | "pro" | "team";
 export type SubscriptionStatus = "free" | "trialing" | "active" | "past_due" | "canceled";
+export type ExecutionMode = "direct" | "capability_required";
+export type TraceAuthMode = "agent_key" | "capability";
 
 export interface AccountRow {
   id: string;
@@ -84,6 +86,7 @@ export interface ApiKeyAuthRow {
   gateway_id: string;
   allowed_methods: string;
   allowed_names: string;
+  execution_mode: ExecutionMode;
   plan: Plan;
   subscription_status: SubscriptionStatus;
 }
@@ -101,4 +104,9 @@ export interface TraceRecord {
   durationMs: number;
   requestBytes: number | null;
   responseBytes: number | null;
+  authMode?: TraceAuthMode | null;
+  capabilityJti?: string | null;
+  policyReason?: string | null;
+  policyMethodRule?: string | null;
+  policyNameRule?: string | null;
 }

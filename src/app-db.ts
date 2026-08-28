@@ -93,7 +93,7 @@ export async function listGatewayKeys(
 ): Promise<Record<string, unknown>[]> {
   const result = await db
     .prepare(
-      `SELECT id, name, key_prefix, allowed_methods, allowed_names, revoked_at, created_at
+      `SELECT id, name, key_prefix, allowed_methods, allowed_names, execution_mode, revoked_at, created_at
        FROM api_keys
        WHERE account_id = ? AND gateway_id = ?
        ORDER BY created_at DESC`,
@@ -115,7 +115,11 @@ export async function getWorkspaceOverview(db: D1Database, accountId: string): P
   const traces = await db
     .prepare(
       `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN decision = 'policy_denied' THEN 1 ELSE 0 END) AS denied,
+              SUM(CASE WHEN decision IN (
+                'policy_denied', 'capability_required', 'capability_scope_denied',
+                'capability_arguments_denied', 'capability_replayed', 'capability_invalid',
+                'capability_parent_invalid', 'unauthorized', 'operation_mismatch'
+              ) THEN 1 ELSE 0 END) AS denied,
               COALESCE(ROUND(AVG(duration_ms)), 0) AS avg_latency
        FROM traces
        WHERE account_id = ? AND created_at >= datetime('now', '-24 hours')`,
@@ -135,7 +139,7 @@ export async function getWorkspaceOverview(db: D1Database, accountId: string): P
 export async function listWorkspaceTraces(
   db: D1Database,
   accountId: string,
-  options: { gatewayId?: string | null; decision?: string | null; q?: string | null; limit: number },
+  options: { gatewayId?: string | null; decision?: string | null; authMode?: string | null; q?: string | null; limit: number },
 ): Promise<Record<string, unknown>[]> {
   const conditions = ["t.account_id = ?"];
   const values: unknown[] = [accountId];
@@ -147,18 +151,24 @@ export async function listWorkspaceTraces(
     conditions.push("t.decision = ?");
     values.push(options.decision);
   }
+  if (options.authMode) {
+    conditions.push("t.auth_mode = ?");
+    values.push(options.authMode);
+  }
   if (options.q) {
-    conditions.push("(t.mcp_name LIKE ? OR t.mcp_method LIKE ? OR t.request_id LIKE ?)");
+    conditions.push("(t.mcp_name LIKE ? OR t.mcp_method LIKE ? OR t.request_id LIKE ? OR t.policy_reason LIKE ? OR t.capability_jti LIKE ?)");
     const term = `%${options.q}%`;
-    values.push(term, term, term);
+    values.push(term, term, term, term, term);
   }
   values.push(options.limit);
 
   const result = await db
     .prepare(
       `SELECT t.id, t.request_id, t.gateway_id, g.name AS gateway_name, t.api_key_id,
-              k.name AS key_name, t.mcp_method, t.mcp_name, t.decision, t.status_code,
-              t.duration_ms, t.request_bytes, t.response_bytes, t.created_at
+              k.name AS key_name, k.execution_mode, t.mcp_method, t.mcp_name, t.decision,
+              t.status_code, t.duration_ms, t.request_bytes, t.response_bytes, t.auth_mode,
+              t.capability_jti, t.policy_reason, t.policy_method_rule, t.policy_name_rule,
+              t.created_at
        FROM traces t
        JOIN gateways g ON g.id = t.gateway_id
        LEFT JOIN api_keys k ON k.id = t.api_key_id

@@ -1,4 +1,4 @@
-import type { AccountRow, ApiKeyAuthRow, D1Database, GatewayRow, TraceRecord } from "./types";
+import type { AccountRow, ApiKeyAuthRow, D1Database, ExecutionMode, GatewayRow, TraceRecord } from "./types";
 
 export async function createAccount(
   db: D1Database,
@@ -52,13 +52,14 @@ export async function createApiKey(
     keyPrefix: string;
     allowedMethods: string[];
     allowedNames: string[];
+    executionMode?: ExecutionMode;
   },
 ): Promise<void> {
   await db
     .prepare(
       `INSERT INTO api_keys
-       (id, account_id, gateway_id, name, secret_hash, key_prefix, allowed_methods, allowed_names)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, account_id, gateway_id, name, secret_hash, key_prefix, allowed_methods, allowed_names, execution_mode)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       key.id,
@@ -69,7 +70,19 @@ export async function createApiKey(
       key.keyPrefix,
       JSON.stringify(key.allowedMethods),
       JSON.stringify(key.allowedNames),
+      key.executionMode ?? "direct",
     )
+    .run();
+}
+
+export async function updateApiKeyExecutionMode(
+  db: D1Database,
+  keyId: string,
+  executionMode: ExecutionMode,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE api_keys SET execution_mode = ? WHERE id = ? AND revoked_at IS NULL`)
+    .bind(executionMode, keyId)
     .run();
 }
 
@@ -92,7 +105,7 @@ export async function getApiKeyForGateway(
   return db
     .prepare(
       `SELECT k.id AS key_id, k.account_id, k.gateway_id, k.allowed_methods, k.allowed_names,
-              a.plan, a.subscription_status
+              k.execution_mode, a.plan, a.subscription_status
        FROM api_keys k
        JOIN accounts a ON a.id = k.account_id
        JOIN gateways g ON g.id = k.gateway_id AND g.account_id = k.account_id
@@ -110,7 +123,7 @@ export async function getApiKeyByIdForGateway(
   return db
     .prepare(
       `SELECT k.id AS key_id, k.account_id, k.gateway_id, k.allowed_methods, k.allowed_names,
-              a.plan, a.subscription_status
+              k.execution_mode, a.plan, a.subscription_status
        FROM api_keys k
        JOIN accounts a ON a.id = k.account_id
        JOIN gateways g ON g.id = k.gateway_id AND g.account_id = k.account_id
@@ -132,8 +145,9 @@ export async function insertTrace(db: D1Database, trace: TraceRecord): Promise<v
     .prepare(
       `INSERT INTO traces
        (id, account_id, gateway_id, api_key_id, request_id, mcp_method, mcp_name,
-        decision, status_code, duration_ms, request_bytes, response_bytes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        decision, status_code, duration_ms, request_bytes, response_bytes, auth_mode,
+        capability_jti, policy_reason, policy_method_rule, policy_name_rule)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       trace.id,
@@ -148,6 +162,11 @@ export async function insertTrace(db: D1Database, trace: TraceRecord): Promise<v
       trace.durationMs,
       trace.requestBytes,
       trace.responseBytes,
+      trace.authMode ?? null,
+      trace.capabilityJti ?? null,
+      trace.policyReason ?? null,
+      trace.policyMethodRule ?? null,
+      trace.policyNameRule ?? null,
     )
     .run();
 }
@@ -160,7 +179,8 @@ export async function listTraces(
   const result = await db
     .prepare(
       `SELECT id, request_id, gateway_id, api_key_id, mcp_method, mcp_name, decision,
-              status_code, duration_ms, request_bytes, response_bytes, created_at
+              status_code, duration_ms, request_bytes, response_bytes, auth_mode,
+              capability_jti, policy_reason, policy_method_rule, policy_name_rule, created_at
        FROM traces
        WHERE gateway_id = ?
        ORDER BY created_at DESC

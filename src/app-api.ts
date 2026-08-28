@@ -13,7 +13,8 @@ import {
 import { getBillingAccount, getResourceCounts, setBillingCustomer } from "./billing-db";
 import { encryptString, generateAgentKey, sha256Hex } from "./crypto";
 import { allPlanEntitlements, getPlanEntitlements } from "./entitlements";
-import { createApiKey, createGateway, getGateway, revokeApiKey } from "./db";
+import { parseExecutionMode } from "./execution-mode";
+import { createApiKey, createGateway, getGateway, revokeApiKey, updateApiKeyExecutionMode } from "./db";
 import { normalizePolicyInput } from "./policy";
 import { validateUpstreamHeaders, validateUpstreamUrl } from "./security";
 import {
@@ -303,6 +304,7 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
         const body = await readJsonObject(request);
         const allowedMethods = normalizePolicyInput(body.allowedMethods);
         const allowedNames = normalizePolicyInput(body.allowedNames);
+        const executionMode = parseExecutionMode(body.executionMode);
         const secret = generateAgentKey();
         const key = {
           id: crypto.randomUUID(),
@@ -313,6 +315,7 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
           keyPrefix: secret.slice(0, 18),
           allowedMethods,
           allowedNames,
+          executionMode,
         };
         await createApiKey(env.DB, key);
         return json(
@@ -324,30 +327,41 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
               keyPrefix: key.keyPrefix,
               allowedMethods,
               allowedNames,
+              executionMode,
             },
-            warning: "This plaintext key is shown only once.",
+            warning: executionMode === "capability_required"
+              ? "This plaintext key is shown only once and may be used only to mint short-lived capabilities."
+              : "This plaintext key is shown only once.",
           },
           201,
         );
       }
     }
 
-    const revokeMatch = /^\/v1\/app\/workspaces\/([^/]+)\/gateways\/([^/]+)\/keys\/([^/]+)$/.exec(path);
-    if (request.method === "DELETE" && revokeMatch) {
-      const workspaceId = decodeURIComponent(revokeMatch[1]);
-      const gatewayId = decodeURIComponent(revokeMatch[2]);
-      const keyId = decodeURIComponent(revokeMatch[3]);
+    const keyMatch = /^\/v1\/app\/workspaces\/([^/]+)\/gateways\/([^/]+)\/keys\/([^/]+)$/.exec(path);
+    if ((request.method === "PATCH" || request.method === "DELETE") && keyMatch) {
+      const workspaceId = decodeURIComponent(keyMatch[1]);
+      const gatewayId = decodeURIComponent(keyMatch[2]);
+      const keyId = decodeURIComponent(keyMatch[3]);
       const membership = await requireMembership(env, user.id, workspaceId, true);
       if (membership instanceof Response) return membership;
       const gateway = await getGateway(env.DB, gatewayId);
       if (!gateway || gateway.account_id !== membership.account_id) return errorResponse(404, "gateway_not_found", "Gateway not found");
       const key = await env.DB
-        .prepare(`SELECT id FROM api_keys WHERE id = ? AND gateway_id = ? AND account_id = ?`)
+        .prepare(`SELECT id, revoked_at FROM api_keys WHERE id = ? AND gateway_id = ? AND account_id = ?`)
         .bind(keyId, gatewayId, membership.account_id)
-        .first<{ id: string }>();
+        .first<{ id: string; revoked_at: string | null }>();
       if (!key) return errorResponse(404, "key_not_found", "Agent key not found");
-      await revokeApiKey(env.DB, keyId);
-      return new Response(null, { status: 204 });
+
+      if (request.method === "DELETE") {
+        await revokeApiKey(env.DB, keyId);
+        return new Response(null, { status: 204 });
+      }
+      if (key.revoked_at) return errorResponse(409, "key_revoked", "A revoked key cannot change execution mode");
+      const body = await readJsonObject(request);
+      const executionMode = parseExecutionMode(body.executionMode);
+      await updateApiKeyExecutionMode(env.DB, keyId, executionMode);
+      return json({ keyId, executionMode });
     }
 
     const tracesMatch = /^\/v1\/app\/workspaces\/([^/]+)\/traces$/.exec(path);
@@ -362,6 +376,7 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
         traces: await listWorkspaceTraces(env.DB, membership.account_id, {
           gatewayId: url.searchParams.get("gatewayId"),
           decision: url.searchParams.get("decision"),
+          authMode: url.searchParams.get("authMode"),
           q: url.searchParams.get("q"),
           limit,
         }),
