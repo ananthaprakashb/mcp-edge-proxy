@@ -9,8 +9,9 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:migrate:local": "wrangler d1 migrations apply contextgateway --local",
-    "db:migrate:remote": "wrangler d1 migrations apply contextgateway --remote"
+    "db:info": "wrangler d1 info mcp-context",
+    "db:migrate:local": "wrangler d1 migrations apply mcp-context --local",
+    "db:migrate:remote": "wrangler d1 migrations apply mcp-context --remote"
   },
   "devDependencies": {
     "typescript": "^5.9.2",
