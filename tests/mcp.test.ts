@@ -59,4 +59,29 @@ describe("MCP operation extraction", () => {
     }));
     expect(nameMismatch.consistent).toBe(false);
   });
+
+  it("rejects a JSON-RPC batch even when a single MCP header is supplied", async () => {
+    const operation = await extractMcpOperation(request({
+      "Mcp-Method": "tools/call",
+      "Mcp-Name": "demo.allowed",
+    }, [
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "demo.allowed" } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "demo.other" } },
+    ]));
+    expect(operation.consistent).toBe(false);
+  });
+
+  it("rejects malformed application/json instead of trusting the headers", async () => {
+    const malformed = new Request("https://example.test/v1/mcp/gw", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "demo.allowed",
+      },
+      body: "{not-json",
+    });
+    const operation = await extractMcpOperation(malformed);
+    expect(operation.consistent).toBe(false);
+  });
 });
