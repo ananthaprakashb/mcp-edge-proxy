@@ -5,6 +5,7 @@ import { authClient } from "./auth-client";
 
 type ExecutionMode = "direct" | "capability_required";
 type AuthMode = "agent_key" | "capability";
+type UpstreamConnectionMode = "public" | "cloudflare_access";
 
 type Workspace = {
   id: string;
@@ -20,6 +21,7 @@ type Gateway = {
   id: string;
   name: string;
   upstream_url: string;
+  connection_mode: UpstreamConnectionMode;
   enabled: number;
   created_at: string;
   key_count: number;
@@ -42,6 +44,7 @@ type Trace = {
   request_id: string;
   gateway_id: string;
   gateway_name: string;
+  connection_mode: UpstreamConnectionMode;
   api_key_id: string | null;
   key_name: string | null;
   execution_mode: ExecutionMode | null;
@@ -81,7 +84,11 @@ type BillingSummary = {
   stripe: { checkoutConfigured: boolean; webhookConfigured: boolean; hasCustomer: boolean };
 };
 
-type Config = { auth: { emailPassword: boolean; github: boolean; google: boolean } };
+type Config = {
+  auth: { emailPassword: boolean; github: boolean; google: boolean };
+  connectivity?: { publicHttps: boolean; cloudflareAccess: boolean; workersVpc: string };
+  observability?: { customSpans: boolean; nativeOtlpExport: boolean };
+};
 type Bootstrap = { user: { id: string; name: string; email: string; image?: string | null }; workspaces: Workspace[] };
 type Overview = { workspace: Workspace; metrics: { gateways: number; activeKeys: number; requests24h: number; denied24h: number; avgLatencyMs: number } };
 type Tab = "overview" | "gateways" | "traces" | "billing";
@@ -100,6 +107,10 @@ function policyText(raw: string): string {
 
 function executionModeLabel(mode: ExecutionMode): string {
   return mode === "capability_required" ? "Capability required" : "Direct compatible";
+}
+
+function connectionModeLabel(mode: UpstreamConnectionMode): string {
+  return mode === "cloudflare_access" ? "Tunnel + Access" : "Public HTTPS";
 }
 
 function reasonLabel(reason: string | null): string {
@@ -158,7 +169,7 @@ function AuthScreen({ config }: { config: Config | null }) {
         <p className="eyebrow">CONTEXTGATEWAY</p>
         <h1>The policy and audit firewall for MCP traffic.</h1>
         <p className="lede">Give agents least-privilege access to MCP tools, keep upstream credentials out of model context, and see every allow/deny decision without retaining prompts.</p>
-        <div className="trust-row"><span>Scoped credentials</span><span>Single-use capabilities</span><span>Explainable policy</span></div>
+        <div className="trust-row"><span>Scoped credentials</span><span>Single-use capabilities</span><span>Private MCP connectivity</span></div>
       </section>
       <section className="auth-card">
         <div className="mode-tabs">
@@ -321,11 +332,11 @@ function Dashboard({ bootstrap }: { bootstrap: Bootstrap }) {
     <main className="content">
       <header className="topbar"><div><p className="eyebrow">{(billing?.billing.plan || workspace?.plan).toUpperCase()} PLAN · {workspace?.role.toUpperCase()}</p><h1>{title}</h1></div><div className="status-pill"><i /> Edge active</div></header>
       {error && <div className="error-banner">{error}<button onClick={() => setError("")}>×</button></div>}{notice && <div className="success-banner">{notice}<button onClick={() => setNotice("")}>×</button></div>}
-      {tab === "overview" && <section><div className="metrics">{overview && <><Metric label="Active gateways" value={overview.metrics.gateways}/><Metric label="Active agent keys" value={overview.metrics.activeKeys}/><Metric label="Requests · 24h" value={overview.metrics.requests24h}/><Metric label="Denied · 24h" value={overview.metrics.denied24h}/><Metric label="Avg latency" value={overview.metrics.avgLatencyMs} suffix="ms"/></>}</div><div className="panel"><div className="panel-head"><div><h3>Recent policy decisions</h3><p>Metadata only — no capability token, prompt, arguments, or response body is retained.</p></div><button onClick={() => setTab("traces")}>Open explorer</button></div><TraceTable traces={traces.slice(0, 8)} /></div></section>}
-      {tab === "gateways" && <section><div className="section-actions"><p>Capability-required keys keep reusable credentials with the trusted orchestrator and expose only single-use authority to executors.</p>{writable && <button className="primary" onClick={() => setShowGatewayForm(true)}>+ New gateway</button>}</div><div className="gateway-grid">{gateways.map((g) => <article className="gateway-card" key={g.id}><div className="gateway-title"><div><h3>{g.name}</h3><code>{location.origin}/v1/mcp/{g.id}</code></div><span className={g.enabled ? "badge good" : "badge"}>{g.enabled ? "Active" : "Disabled"}</span></div><div className="upstream"><span>Upstream</span><code>{g.upstream_url}</code></div><div className="gateway-meta"><span>{Number(g.active_key_count || 0)} active keys</span><span>Created {new Date(g.created_at).toLocaleDateString()}</span></div><div className="card-actions"><button onClick={() => loadKeys(g.id)}>View keys</button>{writable && <button className="primary-subtle" onClick={() => setKeyGateway(g.id)}>Issue key</button>}</div>{keysByGateway[g.id] && <div className="key-list">{keysByGateway[g.id].map((k) => <div className="key-row" key={k.id}><div><strong>{k.name}</strong><code>{k.key_prefix}…</code><small>{policyText(k.allowed_names)}</small><span className={`badge ${k.execution_mode === "capability_required" ? "good" : "warn"}`}>{executionModeLabel(k.execution_mode)}</span></div><div className="key-controls">{writable && !k.revoked_at && <select value={k.execution_mode} onChange={(e) => void updateKeyMode(g.id, k.id, e.target.value as ExecutionMode)} aria-label={`Execution mode for ${k.name}`}><option value="capability_required">Capability required</option><option value="direct">Direct compatible</option></select>}<span className={k.revoked_at ? "badge bad" : "badge good"}>{k.revoked_at ? "Revoked" : "Active"}</span>{writable && !k.revoked_at && <button className="danger-link" onClick={() => revoke(g.id, k.id)}>Revoke</button>}</div></div>)}</div>}</article>)}</div>{gateways.length === 0 && <div className="panel empty-panel">No gateways yet. Add the first MCP server to begin issuing scoped credentials.</div>}</section>}
+      {tab === "overview" && <section><div className="metrics">{overview && <><Metric label="Active gateways" value={overview.metrics.gateways}/><Metric label="Active agent keys" value={overview.metrics.activeKeys}/><Metric label="Requests · 24h" value={overview.metrics.requests24h}/><Metric label="Denied · 24h" value={overview.metrics.denied24h}/><Metric label="Avg latency" value={overview.metrics.avgLatencyMs} suffix="ms"/></>}</div><div className="panel"><div className="panel-head"><div><h3>Recent policy decisions</h3><p>Metadata only — no capability token, prompt, arguments, Access credential, or response body is retained.</p></div><button onClick={() => setTab("traces")}>Open explorer</button></div><TraceTable traces={traces.slice(0, 8)} /></div></section>}
+      {tab === "gateways" && <section><div className="section-actions"><p>Connect public MCP servers or private origins published through Cloudflare Tunnel and protected by Access Service Auth.</p>{writable && <button className="primary" onClick={() => setShowGatewayForm(true)}>+ New gateway</button>}</div><div className="gateway-grid">{gateways.map((g) => <article className="gateway-card" key={g.id}><div className="gateway-title"><div><h3>{g.name}</h3><code>{location.origin}/v1/mcp/{g.id}</code></div><div><span className={g.enabled ? "badge good" : "badge"}>{g.enabled ? "Active" : "Disabled"}</span> <span className={`badge ${g.connection_mode === "cloudflare_access" ? "good" : ""}`}>{connectionModeLabel(g.connection_mode)}</span></div></div><div className="upstream"><span>Upstream</span><code>{g.upstream_url}</code></div><div className="gateway-meta"><span>{Number(g.active_key_count || 0)} active keys</span><span>{connectionModeLabel(g.connection_mode)}</span><span>Created {new Date(g.created_at).toLocaleDateString()}</span></div><div className="card-actions"><button onClick={() => loadKeys(g.id)}>View keys</button>{writable && <button className="primary-subtle" onClick={() => setKeyGateway(g.id)}>Issue key</button>}</div>{keysByGateway[g.id] && <div className="key-list">{keysByGateway[g.id].map((k) => <div className="key-row" key={k.id}><div><strong>{k.name}</strong><code>{k.key_prefix}…</code><small>{policyText(k.allowed_names)}</small><span className={`badge ${k.execution_mode === "capability_required" ? "good" : "warn"}`}>{executionModeLabel(k.execution_mode)}</span></div><div className="key-controls">{writable && !k.revoked_at && <select value={k.execution_mode} onChange={(e) => void updateKeyMode(g.id, k.id, e.target.value as ExecutionMode)} aria-label={`Execution mode for ${k.name}`}><option value="capability_required">Capability required</option><option value="direct">Direct compatible</option></select>}<span className={k.revoked_at ? "badge bad" : "badge good"}>{k.revoked_at ? "Revoked" : "Active"}</span>{writable && !k.revoked_at && <button className="danger-link" onClick={() => revoke(g.id, k.id)}>Revoke</button>}</div></div>)}</div>}</article>)}</div>{gateways.length === 0 && <div className="panel empty-panel">No gateways yet. Add the first MCP server to begin issuing scoped credentials.</div>}</section>}
       {tab === "traces" && <section><div className="filters"><input placeholder="Search tool, method, request ID, reason, capability JTI" value={traceQuery} onChange={(e) => setTraceQuery(e.target.value)} /><select value={traceDecision} onChange={(e) => setTraceDecision(e.target.value)}><option value="">All decisions</option><option value="allowed">Allowed</option><option value="capability_required">Capability required</option><option value="policy_denied">Policy denied</option><option value="capability_scope_denied">Capability scope denied</option><option value="capability_arguments_denied">Capability arguments denied</option><option value="capability_replayed">Capability replayed</option><option value="unauthorized">Unauthorized</option><option value="rate_limited">Rate limited</option><option value="quota_exceeded">Quota exceeded</option><option value="upstream_error">Upstream error</option></select><select value={traceAuthMode} onChange={(e) => setTraceAuthMode(e.target.value)}><option value="">All auth modes</option><option value="agent_key">Agent key</option><option value="capability">Capability</option></select><button onClick={() => loadTraces()}>Refresh</button></div><div className="panel"><TraceTable traces={traces} /></div></section>}
       {tab === "billing" && workspace && <BillingPanel summary={billing} owner={workspace.role === "owner"} busy={billingBusy} onCheckout={checkout} onPortal={openPortal} onRefresh={loadBilling} />}
-      {showGatewayForm && workspace && <GatewayModal workspace={workspace} onClose={() => setShowGatewayForm(false)} onCreated={async () => { setShowGatewayForm(false); setNotice("Gateway created. Issue a scoped agent key next."); await Promise.all([loadGateways(), loadOverview(), loadBilling()]); }} />}
+      {showGatewayForm && workspace && <GatewayModal workspace={workspace} onClose={() => setShowGatewayForm(false)} onCreated={async () => { setShowGatewayForm(false); setNotice("Gateway created. Issue a capability-required key next."); await Promise.all([loadGateways(), loadOverview(), loadBilling()]); }} />}
       {keyGateway && workspace && <KeyModal workspace={workspace} gatewayId={keyGateway} onClose={() => setKeyGateway(null)} onCreated={async (secret, executionMode) => { const createdFor = keyGateway; setKeyGateway(null); setNewSecret({ secret, executionMode }); if (createdFor) await Promise.all([loadKeys(createdFor), loadOverview(), loadBilling()]); }} />}
       {newSecret && <SecretModal secret={newSecret.secret} executionMode={newSecret.executionMode} onClose={() => setNewSecret(null)} />}
     </main>
@@ -354,13 +365,41 @@ function BillingPanel({ summary, owner, busy, onCheckout, onPortal, onRefresh }:
 
 function TraceTable({ traces }: { traces: Trace[] }) {
   if (!traces.length) return <div className="table-empty">No trace records match this view.</div>;
-  return <div className="table-wrap"><table><thead><tr><th>Decision</th><th>Tool / method</th><th>Auth</th><th>Why</th><th>Gateway</th><th>Agent key</th><th>Status</th><th>Latency</th><th>Time</th></tr></thead><tbody>{traces.map((t) => <tr key={t.id}><td><span className={`badge ${t.decision === "allowed" ? "good" : t.decision === "policy_denied" || t.decision === "quota_exceeded" || t.decision === "capability_required" || t.decision.includes("denied") ? "bad" : "warn"}`}>{t.decision}</span></td><td><strong>{t.mcp_name || "—"}</strong><small>{t.mcp_method || "unknown"}</small></td><td><strong>{t.auth_mode === "capability" ? "Capability" : t.auth_mode === "agent_key" ? "Agent key" : "—"}</strong>{t.capability_jti && <small title={t.capability_jti}>JTI {t.capability_jti.slice(0, 10)}…</small>}</td><td className="reason-cell"><strong>{reasonLabel(t.policy_reason)}</strong>{(t.policy_method_rule || t.policy_name_rule) && <small>method: {t.policy_method_rule || "—"} · name: {t.policy_name_rule || "—"}</small>}</td><td>{t.gateway_name}</td><td><strong>{t.key_name || "—"}</strong>{t.execution_mode && <small>{executionModeLabel(t.execution_mode)}</small>}</td><td>{t.status_code}</td><td>{t.duration_ms} ms</td><td>{new Date(t.created_at + (t.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()}</td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table><thead><tr><th>Decision</th><th>Tool / method</th><th>Auth</th><th>Why</th><th>Gateway</th><th>Agent key</th><th>Status</th><th>Latency</th><th>Time</th></tr></thead><tbody>{traces.map((t) => <tr key={t.id}><td><span className={`badge ${t.decision === "allowed" ? "good" : t.decision === "policy_denied" || t.decision === "quota_exceeded" || t.decision === "capability_required" || t.decision.includes("denied") ? "bad" : "warn"}`}>{t.decision}</span></td><td><strong>{t.mcp_name || "—"}</strong><small>{t.mcp_method || "unknown"}</small></td><td><strong>{t.auth_mode === "capability" ? "Capability" : t.auth_mode === "agent_key" ? "Agent key" : "—"}</strong>{t.capability_jti && <small title={t.capability_jti}>JTI {t.capability_jti.slice(0, 10)}…</small>}</td><td className="reason-cell"><strong>{reasonLabel(t.policy_reason)}</strong>{(t.policy_method_rule || t.policy_name_rule) && <small>method: {t.policy_method_rule || "—"} · name: {t.policy_name_rule || "—"}</small>}</td><td><strong>{t.gateway_name}</strong><small>{connectionModeLabel(t.connection_mode)}</small></td><td><strong>{t.key_name || "—"}</strong>{t.execution_mode && <small>{executionModeLabel(t.execution_mode)}</small>}</td><td>{t.status_code}</td><td>{t.duration_ms} ms</td><td>{new Date(t.created_at + (t.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()}</td></tr>)}</tbody></table></div>;
 }
 
 function GatewayModal({ workspace, onClose, onCreated }: { workspace: Workspace; onClose: () => void; onCreated: () => Promise<void> }) {
-  const [name, setName] = useState(""); const [url, setUrl] = useState(""); const [headers, setHeaders] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(e: FormEvent) { e.preventDefault(); setBusy(true); setError(""); try { let upstreamHeaders = {}; if (headers.trim()) upstreamHeaders = JSON.parse(headers); await api(`/v1/app/workspaces/${workspace.id}/gateways`, { method: "POST", body: JSON.stringify({ name, upstreamUrl: url, upstreamHeaders }) }); await onCreated(); } catch (err) { setError(err instanceof Error ? err.message : "Could not create gateway"); } finally { setBusy(false); } }
-  return <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={onClose}>×</button><p className="eyebrow">NEW GATEWAY</p><h2>Connect an MCP server</h2><p>HTTPS only. Upstream auth headers are encrypted before storage and never shown again.</p><form onSubmit={submit}><label>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="GitHub tools" required /></label><label>MCP upstream URL<input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" required /></label><label>Upstream headers <small>optional JSON</small><textarea value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder={'{"Authorization":"Bearer …"}'} /></label>{error && <div className="error-banner">{error}</div>}<button className="primary wide" disabled={busy}>{busy ? "Creating…" : "Create gateway"}</button></form></div></div>;
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [headers, setHeaders] = useState("");
+  const [connectionMode, setConnectionMode] = useState<UpstreamConnectionMode>("public");
+  const [accessClientId, setAccessClientId] = useState("");
+  const [accessClientSecret, setAccessClientSecret] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault(); setBusy(true); setError("");
+    try {
+      let upstreamHeaders = {};
+      if (headers.trim()) upstreamHeaders = JSON.parse(headers);
+      await api(`/v1/app/workspaces/${workspace.id}/gateways`, {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          upstreamUrl: url,
+          upstreamHeaders,
+          connectionMode,
+          ...(connectionMode === "cloudflare_access" ? { accessClientId, accessClientSecret } : {}),
+        }),
+      });
+      await onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create gateway");
+    } finally { setBusy(false); }
+  }
+
+  return <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={onClose}>×</button><p className="eyebrow">NEW GATEWAY</p><h2>Connect an MCP server</h2><p>Use public HTTPS or a private origin published through Cloudflare Tunnel and protected by Access Service Auth. Stored upstream credentials are encrypted and never shown again.</p><form onSubmit={submit}><label>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal GitHub tools" required /></label><label>Connection mode<select value={connectionMode} onChange={(e) => setConnectionMode(e.target.value as UpstreamConnectionMode)}><option value="public">Public HTTPS</option><option value="cloudflare_access">Cloudflare Tunnel + Access</option></select></label><label>MCP upstream URL<input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={connectionMode === "cloudflare_access" ? "https://private-mcp.example.com/mcp" : "https://mcp.example.com/mcp"} required /></label>{connectionMode === "cloudflare_access" && <><label>Access Client ID<input value={accessClientId} onChange={(e) => setAccessClientId(e.target.value)} autoComplete="off" required /></label><label>Access Client Secret<input type="password" value={accessClientSecret} onChange={(e) => setAccessClientSecret(e.target.value)} autoComplete="new-password" required /></label><p className="fine-print">Create a Cloudflare Access Service Token and allow it with a Service Auth policy on the Tunnel hostname. ContextGateway encrypts this pair before storage and strips any caller-supplied Access headers.</p></>}<label>Other upstream headers <small>optional JSON</small><textarea value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder={'{"Authorization":"Bearer …"}'} /></label>{error && <div className="error-banner">{error}</div>}<button className="primary wide" disabled={busy}>{busy ? "Creating…" : "Create gateway"}</button></form></div></div>;
 }
 
 function KeyModal({ workspace, gatewayId, onClose, onCreated }: { workspace: Workspace; gatewayId: string; onClose: () => void; onCreated: (secret: string, executionMode: ExecutionMode) => Promise<void> }) {

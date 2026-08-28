@@ -11,6 +11,7 @@ import {
   type WorkspaceMembership,
 } from "./app-db";
 import { getBillingAccount, getResourceCounts, setBillingCustomer } from "./billing-db";
+import { applyConnectionCredentials, parseConnectionMode } from "./connection-mode";
 import { encryptString, generateAgentKey, sha256Hex } from "./crypto";
 import { allPlanEntitlements, getPlanEntitlements } from "./entitlements";
 import { parseExecutionMode } from "./execution-mode";
@@ -127,6 +128,15 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
           checkoutConfigured: stripeCheckoutConfigured(env),
           webhookConfigured: stripeWebhookConfigured(env),
           plans: allPlanEntitlements(),
+        },
+        connectivity: {
+          publicHttps: true,
+          cloudflareAccess: true,
+          workersVpc: "beta",
+        },
+        observability: {
+          customSpans: true,
+          nativeOtlpExport: true,
         },
       });
     }
@@ -251,7 +261,12 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
         const body = await readJsonObject(request);
         const upstreamUrl = requiredString(body, "upstreamUrl", 2048);
         const parsedUrl = validateUpstreamUrl(upstreamUrl, env.ALLOW_INSECURE_UPSTREAMS === "true");
-        const upstreamHeaders = validateUpstreamHeaders(body.upstreamHeaders);
+        const connectionMode = parseConnectionMode(body.connectionMode);
+        const upstreamHeaders = applyConnectionCredentials(
+          connectionMode,
+          validateUpstreamHeaders(body.upstreamHeaders),
+          { accessClientId: body.accessClientId, accessClientSecret: body.accessClientSecret },
+        );
         let ciphertext: string | null = null;
         let iv: string | null = null;
         if (Object.keys(upstreamHeaders).length > 0) {
@@ -266,6 +281,7 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
           upstreamUrl: parsedUrl.toString(),
           upstreamHeadersCiphertext: ciphertext,
           upstreamHeadersIv: iv,
+          connectionMode,
         };
         await createGateway(env.DB, gateway);
         return json(
@@ -274,6 +290,7 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
               id: gateway.id,
               name: gateway.name,
               upstreamUrl: gateway.upstreamUrl,
+              connectionMode,
               mcpEndpoint: `/v1/mcp/${gateway.id}`,
             },
           },

@@ -8,6 +8,7 @@ import {
   verifyCapabilityToken,
   type CapabilityClaims,
 } from "./capability";
+import { applyConnectionCredentials, parseConnectionMode } from "./connection-mode";
 import { decryptString, encryptString, generateAgentKey, secureTokenEquals, sha256Hex } from "./crypto";
 import {
   createAccount,
@@ -166,7 +167,12 @@ async function handleControlPlane(request: Request, env: Env, path: string): Pro
       const accountId = requiredString(body, "accountId", 100);
       const upstreamUrl = requiredString(body, "upstreamUrl", 2048);
       const parsedUrl = validateUpstreamUrl(upstreamUrl, env.ALLOW_INSECURE_UPSTREAMS === "true");
-      const upstreamHeaders = validateUpstreamHeaders(body.upstreamHeaders);
+      const connectionMode = parseConnectionMode(body.connectionMode);
+      const upstreamHeaders = applyConnectionCredentials(
+        connectionMode,
+        validateUpstreamHeaders(body.upstreamHeaders),
+        { accessClientId: body.accessClientId, accessClientSecret: body.accessClientSecret },
+      );
 
       const account = await env.DB
         .prepare("SELECT id FROM accounts WHERE id = ?")
@@ -189,6 +195,7 @@ async function handleControlPlane(request: Request, env: Env, path: string): Pro
         upstreamUrl: parsedUrl.toString(),
         upstreamHeadersCiphertext: ciphertext,
         upstreamHeadersIv: iv,
+        connectionMode,
       };
       await createGateway(env.DB, gateway);
       return json(
@@ -196,6 +203,7 @@ async function handleControlPlane(request: Request, env: Env, path: string): Pro
           id: gateway.id,
           accountId: gateway.accountId,
           name: gateway.name,
+          connectionMode,
           mcpEndpoint: `/v1/mcp/${gateway.id}`,
         },
         201,
@@ -331,8 +339,12 @@ function applySpanAttributes(
     name: string | null;
     decision?: string;
     policyReason?: string;
+    policyMethodRule?: string | null;
+    policyNameRule?: string | null;
     statusCode?: number;
     authMode?: AuthMode;
+    executionMode?: string;
+    upstreamMode?: string;
   },
 ): void {
   if (!span) return;
@@ -341,7 +353,11 @@ function applySpanAttributes(
   span.setAttribute("mcp.name", values.name ?? undefined);
   span.setAttribute("contextgateway.policy.decision", values.decision);
   span.setAttribute("contextgateway.policy.reason", values.policyReason);
+  span.setAttribute("contextgateway.policy.method_rule", values.policyMethodRule ?? undefined);
+  span.setAttribute("contextgateway.policy.name_rule", values.policyNameRule ?? undefined);
   span.setAttribute("contextgateway.auth.mode", values.authMode);
+  span.setAttribute("contextgateway.key.execution_mode", values.executionMode);
+  span.setAttribute("contextgateway.upstream.mode", values.upstreamMode);
   span.setAttribute("http.response.status_code", values.statusCode);
 }
 
@@ -419,6 +435,7 @@ async function proxyMcp(
     applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "gateway_not_found", policyReason: "gateway_disabled_or_missing", statusCode: 404 });
     return errorResponse(404, "gateway_not_found", "Gateway not found or disabled", requestId);
   }
+  applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, upstreamMode: gateway.connection_mode });
 
   const baseTrace: Omit<TraceRecord, "id" | "durationMs" | "statusCode" | "decision" | "responseBytes"> = {
     accountId: gateway.account_id,
@@ -438,7 +455,7 @@ async function proxyMcp(
   if (!operation.consistent) {
     baseTrace.policyReason = "header_body_operation_mismatch";
     traceResult(env, ctx, startedAt, baseTrace, "operation_mismatch", 400, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "operation_mismatch", policyReason: baseTrace.policyReason, statusCode: 400 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "operation_mismatch", policyReason: baseTrace.policyReason, statusCode: 400, upstreamMode: gateway.connection_mode });
     return errorResponse(400, "operation_mismatch", "MCP headers disagree with the JSON-RPC request body", requestId);
   }
 
@@ -446,7 +463,7 @@ async function proxyMcp(
   if (!token) {
     baseTrace.policyReason = "credential_missing";
     traceResult(env, ctx, startedAt, baseTrace, "unauthorized", 401, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", policyReason: baseTrace.policyReason, statusCode: 401 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", policyReason: baseTrace.policyReason, statusCode: 401, upstreamMode: gateway.connection_mode });
     return errorResponse(401, "unauthorized", "A gateway agent key or capability is required", requestId);
   }
 
@@ -463,21 +480,21 @@ async function proxyMcp(
     } catch (error) {
       baseTrace.policyReason = "capability_signature_expiry_or_claims_invalid";
       traceResult(env, ctx, startedAt, baseTrace, "capability_invalid", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_invalid", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_invalid", policyReason: baseTrace.policyReason, statusCode: 401, authMode, upstreamMode: gateway.connection_mode });
       return errorResponse(401, "invalid_capability", error instanceof Error ? error.message : "Invalid capability", requestId);
     }
 
     if (capability.gatewayId !== gatewayId || capability.method !== operation.method || capability.name !== operation.name) {
       baseTrace.policyReason = "capability_scope_mismatch";
       traceResult(env, ctx, startedAt, baseTrace, "capability_scope_denied", 403, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_scope_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_scope_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode, upstreamMode: gateway.connection_mode });
       return errorResponse(403, "capability_scope_denied", "Request does not match the capability scope", requestId);
     }
     if (capability.argumentsSha256) {
       if (!operation.hasArguments || !(await capabilityArgumentsMatch(capability, operation.arguments))) {
         baseTrace.policyReason = "capability_arguments_digest_mismatch";
         traceResult(env, ctx, startedAt, baseTrace, "capability_arguments_denied", 403, null);
-        applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_arguments_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
+        applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_arguments_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode, upstreamMode: gateway.connection_mode });
         return errorResponse(403, "capability_arguments_denied", "Request arguments do not match the capability", requestId);
       }
     }
@@ -486,7 +503,7 @@ async function proxyMcp(
     if (!auth || auth.account_id !== capability.accountId || capability.accountId !== gateway.account_id) {
       baseTrace.policyReason = "capability_parent_key_revoked_or_mismatched";
       traceResult(env, ctx, startedAt, baseTrace, "capability_parent_invalid", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_parent_invalid", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_parent_invalid", policyReason: baseTrace.policyReason, statusCode: 401, authMode, upstreamMode: gateway.connection_mode });
       return errorResponse(401, "invalid_capability", "The capability's parent agent key is invalid or revoked", requestId);
     }
   } else {
@@ -495,34 +512,53 @@ async function proxyMcp(
     if (!auth) {
       baseTrace.policyReason = "agent_key_invalid_or_revoked";
       traceResult(env, ctx, startedAt, baseTrace, "unauthorized", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", policyReason: baseTrace.policyReason, statusCode: 401, authMode, upstreamMode: gateway.connection_mode });
       return errorResponse(401, "unauthorized", "Invalid or revoked gateway agent key", requestId);
     }
   }
 
   baseTrace.apiKeyId = auth.key_id;
+  applySpanAttributes(span, {
+    gatewayId,
+    method: operation.method,
+    name: operation.name,
+    authMode,
+    executionMode: auth.execution_mode,
+    upstreamMode: gateway.connection_mode,
+  });
+
   const mode = evaluateExecutionMode(auth.execution_mode, authMode);
   if (!mode.allowed) {
     baseTrace.policyReason = mode.reason;
     traceResult(env, ctx, startedAt, baseTrace, "capability_required", 403, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_required", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_required", policyReason: baseTrace.policyReason, statusCode: 403, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
     return errorResponse(403, "capability_required", "This agent key may only be used to mint short-lived capabilities", requestId);
   }
 
   if (!subscriptionAllowsTraffic(auth.plan, auth.subscription_status)) {
     baseTrace.policyReason = "subscription_inactive";
     traceResult(env, ctx, startedAt, baseTrace, "subscription_blocked", 402, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "subscription_blocked", policyReason: baseTrace.policyReason, statusCode: 402, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "subscription_blocked", policyReason: baseTrace.policyReason, statusCode: 402, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
     return errorResponse(402, "subscription_inactive", "The subscription for this gateway is inactive", requestId);
   }
 
   const policy = evaluatePolicyDetailed(parsePolicy(auth.allowed_methods, auth.allowed_names), operation.method, operation.name);
   baseTrace.policyMethodRule = policy.methodRule;
   baseTrace.policyNameRule = policy.nameRule;
+  applySpanAttributes(span, {
+    gatewayId,
+    method: operation.method,
+    name: operation.name,
+    authMode,
+    executionMode: auth.execution_mode,
+    upstreamMode: gateway.connection_mode,
+    policyMethodRule: policy.methodRule,
+    policyNameRule: policy.nameRule,
+  });
   if (!policy.allowed) {
     baseTrace.policyReason = `policy:${policy.reason}`;
     traceResult(env, ctx, startedAt, baseTrace, "policy_denied", 403, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "policy_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "policy_denied", policyReason: baseTrace.policyReason, policyMethodRule: policy.methodRule, policyNameRule: policy.nameRule, statusCode: 403, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
     return errorResponse(403, "policy_denied", `This credential is not allowed to perform the requested MCP operation: ${policy.reason}`, requestId);
   }
 
@@ -535,7 +571,7 @@ async function proxyMcp(
   const limited = await limiter.limit({ key: `${auth.account_id}:${auth.key_id}:${gatewayId}` });
   if (!limited.success) {
     traceResult(env, ctx, startedAt, baseTrace, "rate_limited", 429, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "rate_limited", policyReason: baseTrace.policyReason, statusCode: 429, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "rate_limited", policyReason: baseTrace.policyReason, statusCode: 429, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
     return errorResponse(429, "rate_limited", "Gateway request rate limit exceeded", requestId);
   }
 
@@ -546,13 +582,13 @@ async function proxyMcp(
     } catch {
       baseTrace.policyReason = "capability_replay_store_unavailable";
       traceResult(env, ctx, startedAt, baseTrace, "replay_store_unavailable", 503, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "replay_store_unavailable", policyReason: baseTrace.policyReason, statusCode: 503, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "replay_store_unavailable", policyReason: baseTrace.policyReason, statusCode: 503, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
       return errorResponse(503, "replay_store_unavailable", "Capability replay protection is unavailable", requestId);
     }
     if (!consumed) {
       baseTrace.policyReason = "capability_single_use_already_consumed";
       traceResult(env, ctx, startedAt, baseTrace, "capability_replayed", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_replayed", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_replayed", policyReason: baseTrace.policyReason, statusCode: 401, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
       return errorResponse(401, "capability_replayed", "Capability has already been used", requestId);
     }
   }
@@ -560,7 +596,7 @@ async function proxyMcp(
   const metered = await consumeMonthlyRequest(env.DB, auth.account_id, auth.plan);
   if (!metered.allowed) {
     traceResult(env, ctx, startedAt, baseTrace, "quota_exceeded", 429, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "quota_exceeded", policyReason: baseTrace.policyReason, statusCode: 429, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "quota_exceeded", policyReason: baseTrace.policyReason, statusCode: 429, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
     return errorResponse(
       429,
       "monthly_quota_exceeded",
@@ -595,12 +631,13 @@ async function proxyMcp(
     responseHeaders.set("X-ContextGateway-Request-Id", requestId);
     responseHeaders.set("X-ContextGateway-Auth-Mode", authMode);
     responseHeaders.set("X-ContextGateway-Execution-Mode", auth.execution_mode);
+    responseHeaders.set("X-ContextGateway-Upstream-Mode", gateway.connection_mode);
     responseHeaders.set("Cache-Control", "no-store");
 
     const responseBytes = safeContentLength(upstream.headers);
     const decision = upstream.ok ? "allowed" : "upstream_error";
     traceResult(env, ctx, startedAt, baseTrace, decision, upstream.status, responseBytes);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision, policyReason: baseTrace.policyReason ?? undefined, statusCode: upstream.status, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision, policyReason: baseTrace.policyReason ?? undefined, policyMethodRule: policy.methodRule, policyNameRule: policy.nameRule, statusCode: upstream.status, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
 
     return new Response(upstream.body, {
       status: upstream.status,
@@ -609,7 +646,7 @@ async function proxyMcp(
     });
   } catch {
     traceResult(env, ctx, startedAt, baseTrace, "upstream_unreachable", 502, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "upstream_unreachable", policyReason: baseTrace.policyReason ?? undefined, statusCode: 502, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "upstream_unreachable", policyReason: baseTrace.policyReason ?? undefined, policyMethodRule: policy.methodRule, policyNameRule: policy.nameRule, statusCode: 502, authMode, executionMode: auth.execution_mode, upstreamMode: gateway.connection_mode });
     return errorResponse(502, "upstream_unreachable", "The configured MCP server could not be reached", requestId);
   }
 }

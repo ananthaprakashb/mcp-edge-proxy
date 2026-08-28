@@ -72,7 +72,7 @@ export async function workspaceSlugExists(db: D1Database, slug: string): Promise
 export async function listWorkspaceGateways(db: D1Database, accountId: string): Promise<Record<string, unknown>[]> {
   const result = await db
     .prepare(
-      `SELECT g.id, g.name, g.upstream_url, g.enabled, g.created_at,
+      `SELECT g.id, g.name, g.upstream_url, g.connection_mode, g.enabled, g.created_at,
               COUNT(k.id) AS key_count,
               SUM(CASE WHEN k.revoked_at IS NULL THEN 1 ELSE 0 END) AS active_key_count
        FROM gateways g
@@ -164,11 +164,11 @@ export async function listWorkspaceTraces(
 
   const result = await db
     .prepare(
-      `SELECT t.id, t.request_id, t.gateway_id, g.name AS gateway_name, t.api_key_id,
-              k.name AS key_name, k.execution_mode, t.mcp_method, t.mcp_name, t.decision,
-              t.status_code, t.duration_ms, t.request_bytes, t.response_bytes, t.auth_mode,
-              t.capability_jti, t.policy_reason, t.policy_method_rule, t.policy_name_rule,
-              t.created_at
+      `SELECT t.id, t.request_id, t.gateway_id, g.name AS gateway_name, g.connection_mode,
+              t.api_key_id, k.name AS key_name, k.execution_mode, t.mcp_method, t.mcp_name,
+              t.decision, t.status_code, t.duration_ms, t.request_bytes, t.response_bytes,
+              t.auth_mode, t.capability_jti, t.policy_reason, t.policy_method_rule,
+              t.policy_name_rule, t.created_at
        FROM traces t
        JOIN gateways g ON g.id = t.gateway_id
        LEFT JOIN api_keys k ON k.id = t.api_key_id
