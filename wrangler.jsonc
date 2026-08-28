@@ -7,7 +7,8 @@
     "required": [
       "CONTROL_PLANE_TOKEN",
       "UPSTREAM_ENCRYPTION_KEY",
-      "BETTER_AUTH_SECRET"
+      "BETTER_AUTH_SECRET",
+      "CAPABILITY_SIGNING_KEY"
     ]
   },
   "assets": {
