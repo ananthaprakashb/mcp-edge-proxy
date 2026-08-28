@@ -57,6 +57,7 @@ export type Plan = "free" | "pro" | "team";
 export type SubscriptionStatus = "free" | "trialing" | "active" | "past_due" | "canceled";
 export type ExecutionMode = "direct" | "capability_required";
 export type TraceAuthMode = "agent_key" | "capability";
+export type UpstreamConnectionMode = "public" | "cloudflare_access";
 
 export interface AccountRow {
   id: string;
@@ -77,6 +78,7 @@ export interface GatewayRow {
   upstream_url: string;
   upstream_headers_ciphertext: string | null;
   upstream_headers_iv: string | null;
+  connection_mode: UpstreamConnectionMode;
   enabled: number;
 }
 
