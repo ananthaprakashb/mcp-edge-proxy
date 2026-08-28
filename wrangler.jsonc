@@ -3,6 +3,12 @@
   "name": "contextgateway-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-27",
+  "secrets": {
+    "required": [
+      "CONTROL_PLANE_TOKEN",
+      "UPSTREAM_ENCRYPTION_KEY"
+    ]
+  },
   "observability": {
     "enabled": true,
     "traces": {
@@ -12,7 +18,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "contextgateway",
+      "database_name": "mcp-context",
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
