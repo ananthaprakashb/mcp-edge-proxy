@@ -19,9 +19,11 @@ import {
   insertTrace,
   listTraces,
   revokeApiKey,
+  updateApiKeyExecutionMode,
 } from "./db";
+import { evaluateExecutionMode, parseExecutionMode, type AuthMode } from "./execution-mode";
 import { extractMcpOperation } from "./mcp";
-import { evaluatePolicy, normalizePolicyInput, parsePolicy } from "./policy";
+import { evaluatePolicyDetailed, normalizePolicyInput, parsePolicy } from "./policy";
 import { buildUpstreamHeaders, validateUpstreamHeaders, validateUpstreamUrl } from "./security";
 import { consumeMonthlyRequest } from "./usage";
 import type {
@@ -211,6 +213,7 @@ async function handleControlPlane(request: Request, env: Env, path: string): Pro
 
       const allowedMethods = normalizePolicyInput(body.allowedMethods);
       const allowedNames = normalizePolicyInput(body.allowedNames);
+      const executionMode = parseExecutionMode(body.executionMode);
       const secret = generateAgentKey();
       const key = {
         id: crypto.randomUUID(),
@@ -221,6 +224,7 @@ async function handleControlPlane(request: Request, env: Env, path: string): Pro
         keyPrefix: secret.slice(0, 18),
         allowedMethods,
         allowedNames,
+        executionMode,
       };
       await createApiKey(env.DB, key);
       return json(
@@ -232,16 +236,26 @@ async function handleControlPlane(request: Request, env: Env, path: string): Pro
           keyPrefix: key.keyPrefix,
           allowedMethods,
           allowedNames,
-          warning: "This key is returned only once. Store it securely.",
+          executionMode,
+          warning: executionMode === "capability_required"
+            ? "This key may mint capabilities but cannot execute MCP operations directly."
+            : "This key is returned only once. Store it securely.",
         },
         201,
       );
     }
 
-    const keyDeleteMatch = /^\/v1\/control\/keys\/([^/]+)$/.exec(path);
-    if (request.method === "DELETE" && keyDeleteMatch) {
-      await revokeApiKey(env.DB, decodeURIComponent(keyDeleteMatch[1]));
+    const keyMatch = /^\/v1\/control\/keys\/([^/]+)$/.exec(path);
+    if (keyMatch && request.method === "DELETE") {
+      await revokeApiKey(env.DB, decodeURIComponent(keyMatch[1]));
       return new Response(null, { status: 204 });
+    }
+    if (keyMatch && request.method === "PATCH") {
+      const body = await readJsonObject(request);
+      const executionMode = parseExecutionMode(body.executionMode);
+      const keyId = decodeURIComponent(keyMatch[1]);
+      await updateApiKeyExecutionMode(env.DB, keyId, executionMode);
+      return json({ keyId, executionMode });
     }
 
     if (request.method === "GET" && path === "/v1/control/traces") {
@@ -285,7 +299,7 @@ async function handleControlPlane(request: Request, env: Env, path: string): Pro
 function queueTrace(env: Env, ctx: ExecutionContextLike, trace: TraceRecord): void {
   ctx.waitUntil(
     insertTrace(env.DB, trace).catch(() => {
-      // Tracing is deliberately best-effort; data-plane traffic is not failed by an audit write outage.
+      // Tracing remains best-effort; data-plane traffic is not failed by an audit write outage.
     }),
   );
 }
@@ -316,8 +330,9 @@ function applySpanAttributes(
     method: string | null;
     name: string | null;
     decision?: string;
+    policyReason?: string;
     statusCode?: number;
-    authMode?: "agent_key" | "capability";
+    authMode?: AuthMode;
   },
 ): void {
   if (!span) return;
@@ -325,6 +340,7 @@ function applySpanAttributes(
   span.setAttribute("mcp.method.name", values.method ?? undefined);
   span.setAttribute("mcp.name", values.name ?? undefined);
   span.setAttribute("contextgateway.policy.decision", values.decision);
+  span.setAttribute("contextgateway.policy.reason", values.policyReason);
   span.setAttribute("contextgateway.auth.mode", values.authMode);
   span.setAttribute("http.response.status_code", values.statusCode);
 }
@@ -348,9 +364,9 @@ async function issueCapability(request: Request, env: Env, gatewayId: string): P
   const method = requiredString(body, "method", 200);
   const name = optionalScopeName(body);
   const ttlSeconds = parseCapabilityTtl(body.ttlSeconds);
-  const policy = parsePolicy(auth.allowed_methods, auth.allowed_names);
-  if (!evaluatePolicy(policy, method, name)) {
-    return errorResponse(403, "scope_denied", "Requested capability is outside this agent key policy");
+  const policy = evaluatePolicyDetailed(parsePolicy(auth.allowed_methods, auth.allowed_names), method, name);
+  if (!policy.allowed) {
+    return errorResponse(403, "scope_denied", `Requested capability is outside this agent key policy: ${policy.reason}`);
   }
 
   const limiter = auth.plan === "free" ? env.FREE_RATE_LIMITER : env.PAID_RATE_LIMITER;
@@ -378,6 +394,7 @@ async function issueCapability(request: Request, env: Env, gatewayId: string): P
       arguments_bound: Boolean(issued.claims.argumentsSha256),
       scope: { gatewayId, method, name },
       jti: issued.claims.jti,
+      policy: { reason: policy.reason, methodRule: policy.methodRule, nameRule: policy.nameRule },
       warning: "Give this short-lived capability to the executor, not the long-lived gateway key.",
     },
     201,
@@ -399,95 +416,126 @@ async function proxyMcp(
 
   const gateway = await getGateway(env.DB, gatewayId);
   if (!gateway || gateway.enabled !== 1) {
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "gateway_not_found", statusCode: 404 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "gateway_not_found", policyReason: "gateway_disabled_or_missing", statusCode: 404 });
     return errorResponse(404, "gateway_not_found", "Gateway not found or disabled", requestId);
   }
 
-  const baseTrace = {
+  const baseTrace: Omit<TraceRecord, "id" | "durationMs" | "statusCode" | "decision" | "responseBytes"> = {
     accountId: gateway.account_id,
     gatewayId,
-    apiKeyId: null as string | null,
+    apiKeyId: null,
     requestId,
     mcpMethod: operation.method,
     mcpName: operation.name,
     requestBytes,
+    authMode: null,
+    capabilityJti: null,
+    policyReason: null,
+    policyMethodRule: null,
+    policyNameRule: null,
   };
 
   if (!operation.consistent) {
+    baseTrace.policyReason = "header_body_operation_mismatch";
     traceResult(env, ctx, startedAt, baseTrace, "operation_mismatch", 400, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "operation_mismatch", statusCode: 400 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "operation_mismatch", policyReason: baseTrace.policyReason, statusCode: 400 });
     return errorResponse(400, "operation_mismatch", "MCP headers disagree with the JSON-RPC request body", requestId);
   }
 
   const token = bearerToken(request);
   if (!token) {
+    baseTrace.policyReason = "credential_missing";
     traceResult(env, ctx, startedAt, baseTrace, "unauthorized", 401, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", statusCode: 401 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", policyReason: baseTrace.policyReason, statusCode: 401 });
     return errorResponse(401, "unauthorized", "A gateway agent key or capability is required", requestId);
   }
 
   let auth: ApiKeyAuthRow | null = null;
   let capability: CapabilityClaims | null = null;
-  let authMode: "agent_key" | "capability" = "agent_key";
+  let authMode: AuthMode = "agent_key";
 
   if (isCapabilityToken(token)) {
     authMode = "capability";
+    baseTrace.authMode = authMode;
     try {
       capability = await verifyCapabilityToken(env.CAPABILITY_SIGNING_KEY, token);
+      baseTrace.capabilityJti = capability.jti;
     } catch (error) {
+      baseTrace.policyReason = "capability_signature_expiry_or_claims_invalid";
       traceResult(env, ctx, startedAt, baseTrace, "capability_invalid", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_invalid", statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_invalid", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
       return errorResponse(401, "invalid_capability", error instanceof Error ? error.message : "Invalid capability", requestId);
     }
 
     if (capability.gatewayId !== gatewayId || capability.method !== operation.method || capability.name !== operation.name) {
+      baseTrace.policyReason = "capability_scope_mismatch";
       traceResult(env, ctx, startedAt, baseTrace, "capability_scope_denied", 403, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_scope_denied", statusCode: 403, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_scope_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
       return errorResponse(403, "capability_scope_denied", "Request does not match the capability scope", requestId);
     }
     if (capability.argumentsSha256) {
       if (!operation.hasArguments || !(await capabilityArgumentsMatch(capability, operation.arguments))) {
+        baseTrace.policyReason = "capability_arguments_digest_mismatch";
         traceResult(env, ctx, startedAt, baseTrace, "capability_arguments_denied", 403, null);
-        applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_arguments_denied", statusCode: 403, authMode });
+        applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_arguments_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
         return errorResponse(403, "capability_arguments_denied", "Request arguments do not match the capability", requestId);
       }
     }
 
     auth = await getApiKeyByIdForGateway(env.DB, gatewayId, capability.apiKeyId);
     if (!auth || auth.account_id !== capability.accountId || capability.accountId !== gateway.account_id) {
+      baseTrace.policyReason = "capability_parent_key_revoked_or_mismatched";
       traceResult(env, ctx, startedAt, baseTrace, "capability_parent_invalid", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_parent_invalid", statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_parent_invalid", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
       return errorResponse(401, "invalid_capability", "The capability's parent agent key is invalid or revoked", requestId);
     }
   } else {
+    baseTrace.authMode = authMode;
     auth = await getApiKeyForGateway(env.DB, gatewayId, await sha256Hex(token));
     if (!auth) {
+      baseTrace.policyReason = "agent_key_invalid_or_revoked";
       traceResult(env, ctx, startedAt, baseTrace, "unauthorized", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
       return errorResponse(401, "unauthorized", "Invalid or revoked gateway agent key", requestId);
     }
   }
 
   baseTrace.apiKeyId = auth.key_id;
+  const mode = evaluateExecutionMode(auth.execution_mode, authMode);
+  if (!mode.allowed) {
+    baseTrace.policyReason = mode.reason;
+    traceResult(env, ctx, startedAt, baseTrace, "capability_required", 403, null);
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_required", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
+    return errorResponse(403, "capability_required", "This agent key may only be used to mint short-lived capabilities", requestId);
+  }
 
   if (!subscriptionAllowsTraffic(auth.plan, auth.subscription_status)) {
+    baseTrace.policyReason = "subscription_inactive";
     traceResult(env, ctx, startedAt, baseTrace, "subscription_blocked", 402, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "subscription_blocked", statusCode: 402, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "subscription_blocked", policyReason: baseTrace.policyReason, statusCode: 402, authMode });
     return errorResponse(402, "subscription_inactive", "The subscription for this gateway is inactive", requestId);
   }
 
-  const policy = parsePolicy(auth.allowed_methods, auth.allowed_names);
-  if (!evaluatePolicy(policy, operation.method, operation.name)) {
+  const policy = evaluatePolicyDetailed(parsePolicy(auth.allowed_methods, auth.allowed_names), operation.method, operation.name);
+  baseTrace.policyMethodRule = policy.methodRule;
+  baseTrace.policyNameRule = policy.nameRule;
+  if (!policy.allowed) {
+    baseTrace.policyReason = `policy:${policy.reason}`;
     traceResult(env, ctx, startedAt, baseTrace, "policy_denied", 403, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "policy_denied", statusCode: 403, authMode });
-    return errorResponse(403, "policy_denied", "This credential is not allowed to perform the requested MCP operation", requestId);
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "policy_denied", policyReason: baseTrace.policyReason, statusCode: 403, authMode });
+    return errorResponse(403, "policy_denied", `This credential is not allowed to perform the requested MCP operation: ${policy.reason}`, requestId);
   }
+
+  const capabilityConstraint = capability
+    ? capability.argumentsSha256 ? "capability:scope_and_arguments_bound" : "capability:scope_bound"
+    : "capability:not_used";
+  baseTrace.policyReason = `mode:${mode.reason};policy:${policy.reason};${capabilityConstraint}`;
 
   const limiter = auth.plan === "free" ? env.FREE_RATE_LIMITER : env.PAID_RATE_LIMITER;
   const limited = await limiter.limit({ key: `${auth.account_id}:${auth.key_id}:${gatewayId}` });
   if (!limited.success) {
     traceResult(env, ctx, startedAt, baseTrace, "rate_limited", 429, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "rate_limited", statusCode: 429, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "rate_limited", policyReason: baseTrace.policyReason, statusCode: 429, authMode });
     return errorResponse(429, "rate_limited", "Gateway request rate limit exceeded", requestId);
   }
 
@@ -496,13 +544,15 @@ async function proxyMcp(
     try {
       consumed = await consumeCapability(env.DB, capability);
     } catch {
+      baseTrace.policyReason = "capability_replay_store_unavailable";
       traceResult(env, ctx, startedAt, baseTrace, "replay_store_unavailable", 503, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "replay_store_unavailable", statusCode: 503, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "replay_store_unavailable", policyReason: baseTrace.policyReason, statusCode: 503, authMode });
       return errorResponse(503, "replay_store_unavailable", "Capability replay protection is unavailable", requestId);
     }
     if (!consumed) {
+      baseTrace.policyReason = "capability_single_use_already_consumed";
       traceResult(env, ctx, startedAt, baseTrace, "capability_replayed", 401, null);
-      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_replayed", statusCode: 401, authMode });
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_replayed", policyReason: baseTrace.policyReason, statusCode: 401, authMode });
       return errorResponse(401, "capability_replayed", "Capability has already been used", requestId);
     }
   }
@@ -510,7 +560,7 @@ async function proxyMcp(
   const metered = await consumeMonthlyRequest(env.DB, auth.account_id, auth.plan);
   if (!metered.allowed) {
     traceResult(env, ctx, startedAt, baseTrace, "quota_exceeded", 429, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "quota_exceeded", statusCode: 429, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "quota_exceeded", policyReason: baseTrace.policyReason, statusCode: 429, authMode });
     return errorResponse(
       429,
       "monthly_quota_exceeded",
@@ -544,12 +594,13 @@ async function proxyMcp(
     responseHeaders.delete("proxy-authenticate");
     responseHeaders.set("X-ContextGateway-Request-Id", requestId);
     responseHeaders.set("X-ContextGateway-Auth-Mode", authMode);
+    responseHeaders.set("X-ContextGateway-Execution-Mode", auth.execution_mode);
     responseHeaders.set("Cache-Control", "no-store");
 
     const responseBytes = safeContentLength(upstream.headers);
     const decision = upstream.ok ? "allowed" : "upstream_error";
     traceResult(env, ctx, startedAt, baseTrace, decision, upstream.status, responseBytes);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision, statusCode: upstream.status, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision, policyReason: baseTrace.policyReason ?? undefined, statusCode: upstream.status, authMode });
 
     return new Response(upstream.body, {
       status: upstream.status,
@@ -558,7 +609,7 @@ async function proxyMcp(
     });
   } catch {
     traceResult(env, ctx, startedAt, baseTrace, "upstream_unreachable", 502, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "upstream_unreachable", statusCode: 502, authMode });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "upstream_unreachable", policyReason: baseTrace.policyReason ?? undefined, statusCode: 502, authMode });
     return errorResponse(502, "upstream_unreachable", "The configured MCP server could not be reached", requestId);
   }
 }
