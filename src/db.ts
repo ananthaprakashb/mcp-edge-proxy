@@ -1,4 +1,4 @@
-import type { AccountRow, ApiKeyAuthRow, D1Database, ExecutionMode, GatewayRow, TraceRecord } from "./types";
+import type { AccountRow, ApiKeyAuthRow, D1Database, ExecutionMode, GatewayRow, TraceRecord, UpstreamConnectionMode } from "./types";
 
 export async function createAccount(
   db: D1Database,
@@ -22,13 +22,14 @@ export async function createGateway(
     upstreamUrl: string;
     upstreamHeadersCiphertext: string | null;
     upstreamHeadersIv: string | null;
+    connectionMode?: UpstreamConnectionMode;
   },
 ): Promise<void> {
   await db
     .prepare(
       `INSERT INTO gateways
-       (id, account_id, name, upstream_url, upstream_headers_ciphertext, upstream_headers_iv)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       (id, account_id, name, upstream_url, upstream_headers_ciphertext, upstream_headers_iv, connection_mode)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       gateway.id,
@@ -37,6 +38,7 @@ export async function createGateway(
       gateway.upstreamUrl,
       gateway.upstreamHeadersCiphertext,
       gateway.upstreamHeadersIv,
+      gateway.connectionMode ?? "public",
     )
     .run();
 }
@@ -90,7 +92,7 @@ export async function getGateway(db: D1Database, gatewayId: string): Promise<Gat
   return db
     .prepare(
       `SELECT id, account_id, name, upstream_url, upstream_headers_ciphertext,
-              upstream_headers_iv, enabled
+              upstream_headers_iv, connection_mode, enabled
        FROM gateways WHERE id = ?`,
     )
     .bind(gatewayId)
