@@ -10,10 +10,21 @@ import {
   workspaceSlugExists,
   type WorkspaceMembership,
 } from "./app-db";
+import { getBillingAccount, getResourceCounts, setBillingCustomer } from "./billing-db";
 import { encryptString, generateAgentKey, sha256Hex } from "./crypto";
+import { allPlanEntitlements, getPlanEntitlements } from "./entitlements";
 import { createApiKey, createGateway, getGateway, revokeApiKey } from "./db";
 import { normalizePolicyInput } from "./policy";
 import { validateUpstreamHeaders, validateUpstreamUrl } from "./security";
+import {
+  createCheckoutSession,
+  createPortalSession,
+  createStripeCustomer,
+  parsePaidPlan,
+  stripeCheckoutConfigured,
+  stripeWebhookConfigured,
+} from "./stripe";
+import { getMonthlyUsage } from "./usage";
 import type { Env } from "./types";
 
 const JSON_HEADERS = {
@@ -67,6 +78,10 @@ function canWrite(membership: WorkspaceMembership): boolean {
   return membership.role === "owner" || membership.role === "admin";
 }
 
+function canManageBilling(membership: WorkspaceMembership): boolean {
+  return membership.role === "owner";
+}
+
 async function sessionUser(request: Request, env: Env): Promise<{ id: string; email: string; name: string; image?: string | null } | null> {
   const auth = createAuth(env, request);
   const session = await auth.api.getSession({ headers: request.headers });
@@ -91,6 +106,13 @@ async function requireMembership(
   return membership;
 }
 
+async function requireBillingOwner(env: Env, userId: string, workspaceId: string): Promise<WorkspaceMembership | Response> {
+  const membership = await requireMembership(env, userId, workspaceId);
+  if (membership instanceof Response) return membership;
+  if (!canManageBilling(membership)) return errorResponse(403, "forbidden", "Workspace owner role is required for billing changes");
+  return membership;
+}
+
 export async function handleAppApi(request: Request, env: Env, path: string): Promise<Response> {
   try {
     if (request.method === "GET" && path === "/v1/app/config") {
@@ -99,6 +121,11 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
         auth: {
           emailPassword: true,
           ...authProviderAvailability(env),
+        },
+        billing: {
+          checkoutConfigured: stripeCheckoutConfigured(env),
+          webhookConfigured: stripeWebhookConfigured(env),
+          plans: allPlanEntitlements(),
         },
       });
     }
@@ -133,6 +160,77 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
       return json({ workspace: membership, metrics: await getWorkspaceOverview(env.DB, membership.account_id) });
     }
 
+    const billingMatch = /^\/v1\/app\/workspaces\/([^/]+)\/billing$/.exec(path);
+    if (request.method === "GET" && billingMatch) {
+      const workspaceId = decodeURIComponent(billingMatch[1]);
+      const membership = await requireMembership(env, user.id, workspaceId);
+      if (membership instanceof Response) return membership;
+      const account = await getBillingAccount(env.DB, membership.account_id);
+      if (!account) return errorResponse(404, "account_not_found", "Billing account not found");
+      return json({
+        workspace: membership,
+        billing: account,
+        entitlements: getPlanEntitlements(account.plan),
+        usage: await getMonthlyUsage(env.DB, account.id, account.plan),
+        resources: await getResourceCounts(env.DB, account.id),
+        stripe: {
+          checkoutConfigured: stripeCheckoutConfigured(env),
+          webhookConfigured: stripeWebhookConfigured(env),
+          hasCustomer: Boolean(account.billing_customer_id),
+        },
+      });
+    }
+
+    const checkoutMatch = /^\/v1\/app\/workspaces\/([^/]+)\/billing\/checkout$/.exec(path);
+    if (request.method === "POST" && checkoutMatch) {
+      const workspaceId = decodeURIComponent(checkoutMatch[1]);
+      const membership = await requireBillingOwner(env, user.id, workspaceId);
+      if (membership instanceof Response) return membership;
+      if (!stripeCheckoutConfigured(env)) return errorResponse(503, "billing_not_configured", "Stripe Checkout is not configured yet");
+      const body = await readJsonObject(request);
+      const targetPlan = parsePaidPlan(body.plan);
+      const account = await getBillingAccount(env.DB, membership.account_id);
+      if (!account) return errorResponse(404, "account_not_found", "Billing account not found");
+      if (account.billing_subscription_id && (account.subscription_status === "active" || account.subscription_status === "trialing")) {
+        return errorResponse(409, "subscription_exists", "Use Manage billing to change an existing paid subscription");
+      }
+
+      let customerId = account.billing_customer_id;
+      if (!customerId) {
+        const customer = await createStripeCustomer(env, {
+          accountId: account.id,
+          workspaceName: membership.name,
+          email: user.email,
+        });
+        customerId = customer.id;
+        await setBillingCustomer(env.DB, account.id, customerId);
+      }
+
+      const session = await createCheckoutSession(env, {
+        accountId: account.id,
+        customerId,
+        plan: targetPlan,
+        origin: new URL(request.url).origin,
+      });
+      if (!session.url) throw new Error("Stripe Checkout did not return a redirect URL");
+      return json({ url: session.url });
+    }
+
+    const portalMatch = /^\/v1\/app\/workspaces\/([^/]+)\/billing\/portal$/.exec(path);
+    if (request.method === "POST" && portalMatch) {
+      const workspaceId = decodeURIComponent(portalMatch[1]);
+      const membership = await requireBillingOwner(env, user.id, workspaceId);
+      if (membership instanceof Response) return membership;
+      if (!stripeCheckoutConfigured(env)) return errorResponse(503, "billing_not_configured", "Stripe billing is not configured yet");
+      const account = await getBillingAccount(env.DB, membership.account_id);
+      if (!account?.billing_customer_id) return errorResponse(409, "billing_customer_missing", "Start a paid subscription before opening the billing portal");
+      const session = await createPortalSession(env, {
+        customerId: account.billing_customer_id,
+        origin: new URL(request.url).origin,
+      });
+      return json({ url: session.url });
+    }
+
     const gatewaysMatch = /^\/v1\/app\/workspaces\/([^/]+)\/gateways$/.exec(path);
     if (gatewaysMatch) {
       const workspaceId = decodeURIComponent(gatewaysMatch[1]);
@@ -144,6 +242,11 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
       }
 
       if (request.method === "POST") {
+        const counts = await getResourceCounts(env.DB, membership.account_id);
+        const entitlement = getPlanEntitlements(membership.plan);
+        if (counts.gateways >= entitlement.gatewayLimit) {
+          return errorResponse(409, "plan_limit_reached", `${entitlement.displayName} allows ${entitlement.gatewayLimit} active gateway${entitlement.gatewayLimit === 1 ? "" : "s"}`);
+        }
         const body = await readJsonObject(request);
         const upstreamUrl = requiredString(body, "upstreamUrl", 2048);
         const parsedUrl = validateUpstreamUrl(upstreamUrl, env.ALLOW_INSECURE_UPSTREAMS === "true");
@@ -192,6 +295,11 @@ export async function handleAppApi(request: Request, env: Env, path: string): Pr
       }
 
       if (request.method === "POST") {
+        const counts = await getResourceCounts(env.DB, membership.account_id);
+        const entitlement = getPlanEntitlements(membership.plan);
+        if (counts.activeKeys >= entitlement.activeKeyLimit) {
+          return errorResponse(409, "plan_limit_reached", `${entitlement.displayName} allows ${entitlement.activeKeyLimit} active agent keys`);
+        }
         const body = await readJsonObject(request);
         const allowedMethods = normalizePolicyInput(body.allowedMethods);
         const allowedNames = normalizePolicyInput(body.allowedNames);
