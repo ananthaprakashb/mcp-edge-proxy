@@ -21,14 +21,16 @@ export async function extractMcpOperation(request: Request): Promise<McpOperatio
   let bodyName: string | null = null;
   let argumentsValue: unknown = undefined;
   let hasArguments = false;
-  let parsedBody = false;
 
   const contentType = request.headers.get("content-type") ?? "";
-  if (contentType.toLowerCase().includes("application/json")) {
+  const expectsJson = contentType.toLowerCase().includes("application/json");
+  let supportedJsonBody = !expectsJson;
+
+  if (expectsJson) {
     try {
       const body = (await request.clone().json()) as unknown;
       if (isRecord(body)) {
-        parsedBody = true;
+        supportedJsonBody = true;
         bodyMethod = stringField(body.method);
         if (isRecord(body.params)) {
           bodyName = stringField(body.params.name);
@@ -39,11 +41,11 @@ export async function extractMcpOperation(request: Request): Promise<McpOperatio
         }
       }
     } catch {
-      // Malformed JSON will fail closed through a missing operation or upstream parsing.
+      supportedJsonBody = false;
     }
   }
 
-  const consistent = !(
+  const consistent = supportedJsonBody && !(
     (headerMethod && bodyMethod && headerMethod !== bodyMethod)
     || (headerName && bodyName && headerName !== bodyName)
   );
@@ -53,6 +55,6 @@ export async function extractMcpOperation(request: Request): Promise<McpOperatio
     name: headerName ?? bodyName,
     arguments: argumentsValue,
     hasArguments,
-    consistent: parsedBody ? consistent : true,
+    consistent,
   };
 }
