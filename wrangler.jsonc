@@ -10,9 +10,6 @@
       "BETTER_AUTH_SECRET"
     ]
   },
-  "vars": {
-    "BETTER_AUTH_URL": "https://contextgateway-edge.subhafash-86.workers.dev"
-  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
