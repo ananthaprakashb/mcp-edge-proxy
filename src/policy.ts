@@ -3,6 +3,13 @@ export interface Policy {
   allowedNames: string[];
 }
 
+export interface PolicyEvaluation {
+  allowed: boolean;
+  reason: "missing_method" | "method_not_allowed" | "name_not_allowed" | "method_allowed_no_name" | "allowed_exact" | "allowed_wildcard";
+  methodRule: string | null;
+  nameRule: string | null;
+}
+
 function normalizeRules(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
@@ -27,14 +34,33 @@ export function parsePolicy(allowedMethodsJson: string, allowedNamesJson: string
   };
 }
 
-function matches(rules: string[], value: string): boolean {
-  return rules.includes("*") || rules.includes(value);
+function matchedRule(rules: string[], value: string): string | null {
+  if (rules.includes(value)) return value;
+  if (rules.includes("*")) return "*";
+  return null;
+}
+
+export function evaluatePolicyDetailed(policy: Policy, method: string | null, name: string | null): PolicyEvaluation {
+  if (!method) {
+    return { allowed: false, reason: "missing_method", methodRule: null, nameRule: null };
+  }
+  const methodRule = matchedRule(policy.allowedMethods, method);
+  if (!methodRule) {
+    return { allowed: false, reason: "method_not_allowed", methodRule: null, nameRule: null };
+  }
+  if (name === null) {
+    return { allowed: true, reason: "method_allowed_no_name", methodRule, nameRule: null };
+  }
+  const nameRule = matchedRule(policy.allowedNames, name);
+  if (!nameRule) {
+    return { allowed: false, reason: "name_not_allowed", methodRule, nameRule: null };
+  }
+  const wildcard = methodRule === "*" || nameRule === "*";
+  return { allowed: true, reason: wildcard ? "allowed_wildcard" : "allowed_exact", methodRule, nameRule };
 }
 
 export function evaluatePolicy(policy: Policy, method: string | null, name: string | null): boolean {
-  if (!method || !matches(policy.allowedMethods, method)) return false;
-  if (name === null) return true;
-  return matches(policy.allowedNames, name);
+  return evaluatePolicyDetailed(policy, method, name).allowed;
 }
 
 export function normalizePolicyInput(value: unknown, fallback: string[] = ["*"]): string[] {
