@@ -102,6 +102,24 @@ export async function getApiKeyForGateway(
     .first<ApiKeyAuthRow>();
 }
 
+export async function getApiKeyByIdForGateway(
+  db: D1Database,
+  gatewayId: string,
+  keyId: string,
+): Promise<ApiKeyAuthRow | null> {
+  return db
+    .prepare(
+      `SELECT k.id AS key_id, k.account_id, k.gateway_id, k.allowed_methods, k.allowed_names,
+              a.plan, a.subscription_status
+       FROM api_keys k
+       JOIN accounts a ON a.id = k.account_id
+       JOIN gateways g ON g.id = k.gateway_id AND g.account_id = k.account_id
+       WHERE k.gateway_id = ? AND k.id = ? AND k.revoked_at IS NULL`,
+    )
+    .bind(gatewayId, keyId)
+    .first<ApiKeyAuthRow>();
+}
+
 export async function revokeApiKey(db: D1Database, keyId: string): Promise<void> {
   await db
     .prepare(`UPDATE api_keys SET revoked_at = datetime('now') WHERE id = ? AND revoked_at IS NULL`)

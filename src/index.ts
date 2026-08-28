@@ -1,8 +1,19 @@
+import {
+  capabilityArgumentsMatch,
+  consumeCapability,
+  DEFAULT_CAPABILITY_TTL_SECONDS,
+  isCapabilityToken,
+  issueCapabilityToken,
+  MAX_CAPABILITY_TTL_SECONDS,
+  verifyCapabilityToken,
+  type CapabilityClaims,
+} from "./capability";
 import { decryptString, encryptString, generateAgentKey, secureTokenEquals, sha256Hex } from "./crypto";
 import {
   createAccount,
   createApiKey,
   createGateway,
+  getApiKeyByIdForGateway,
   getApiKeyForGateway,
   getGateway,
   insertTrace,
@@ -14,6 +25,7 @@ import { evaluatePolicy, normalizePolicyInput, parsePolicy } from "./policy";
 import { buildUpstreamHeaders, validateUpstreamHeaders, validateUpstreamUrl } from "./security";
 import { consumeMonthlyRequest } from "./usage";
 import type {
+  ApiKeyAuthRow,
   Env,
   ExecutionContextLike,
   Plan,
@@ -68,6 +80,23 @@ function optionalString(body: Record<string, unknown>, field: string, maxLength 
     throw new Error(`${field} must be a string no longer than ${maxLength} characters`);
   }
   return value;
+}
+
+function optionalScopeName(body: Record<string, unknown>): string | null {
+  const value = body.name;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !value.trim() || value.length > 300) {
+    throw new Error("name must be null or a non-empty string no longer than 300 characters");
+  }
+  return value.trim();
+}
+
+function parseCapabilityTtl(value: unknown): number {
+  if (value === undefined) return DEFAULT_CAPABILITY_TTL_SECONDS;
+  if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > MAX_CAPABILITY_TTL_SECONDS) {
+    throw new Error(`ttlSeconds must be an integer between 1 and ${MAX_CAPABILITY_TTL_SECONDS}`);
+  }
+  return Number(value);
 }
 
 function parsePlan(value: unknown): Plan {
@@ -282,14 +311,77 @@ function traceResult(
 
 function applySpanAttributes(
   span: TraceSpan | undefined,
-  values: { gatewayId: string; method: string | null; name: string | null; decision?: string; statusCode?: number },
+  values: {
+    gatewayId: string;
+    method: string | null;
+    name: string | null;
+    decision?: string;
+    statusCode?: number;
+    authMode?: "agent_key" | "capability";
+  },
 ): void {
   if (!span) return;
   span.setAttribute("contextgateway.gateway.id", values.gatewayId);
   span.setAttribute("mcp.method.name", values.method ?? undefined);
   span.setAttribute("mcp.name", values.name ?? undefined);
   span.setAttribute("contextgateway.policy.decision", values.decision);
+  span.setAttribute("contextgateway.auth.mode", values.authMode);
   span.setAttribute("http.response.status_code", values.statusCode);
+}
+
+async function issueCapability(request: Request, env: Env, gatewayId: string): Promise<Response> {
+  if (request.method !== "POST") return errorResponse(405, "method_not_allowed", "POST required");
+  const gateway = await getGateway(env.DB, gatewayId);
+  if (!gateway || gateway.enabled !== 1) return errorResponse(404, "gateway_not_found", "Gateway not found or disabled");
+
+  const bootstrapToken = bearerToken(request);
+  if (!bootstrapToken || isCapabilityToken(bootstrapToken)) {
+    return errorResponse(401, "unauthorized", "A long-lived gateway agent key is required to mint capabilities");
+  }
+  const auth = await getApiKeyForGateway(env.DB, gatewayId, await sha256Hex(bootstrapToken));
+  if (!auth) return errorResponse(401, "unauthorized", "Invalid or revoked gateway agent key");
+  if (!subscriptionAllowsTraffic(auth.plan, auth.subscription_status)) {
+    return errorResponse(402, "subscription_inactive", "The subscription for this gateway is inactive");
+  }
+
+  const body = await readJsonObject(request);
+  const method = requiredString(body, "method", 200);
+  const name = optionalScopeName(body);
+  const ttlSeconds = parseCapabilityTtl(body.ttlSeconds);
+  const policy = parsePolicy(auth.allowed_methods, auth.allowed_names);
+  if (!evaluatePolicy(policy, method, name)) {
+    return errorResponse(403, "scope_denied", "Requested capability is outside this agent key policy");
+  }
+
+  const limiter = auth.plan === "free" ? env.FREE_RATE_LIMITER : env.PAID_RATE_LIMITER;
+  const limited = await limiter.limit({ key: `${auth.account_id}:${auth.key_id}:${gatewayId}:capability-issue` });
+  if (!limited.success) return errorResponse(429, "rate_limited", "Capability issuance rate limit exceeded");
+
+  const bindArguments = Object.prototype.hasOwnProperty.call(body, "arguments");
+  const issued = await issueCapabilityToken(env.CAPABILITY_SIGNING_KEY, {
+    accountId: auth.account_id,
+    gatewayId,
+    apiKeyId: auth.key_id,
+    method,
+    name,
+    ttlSeconds,
+    arguments: body.arguments,
+    bindArguments,
+  });
+
+  return json(
+    {
+      access_token: issued.token,
+      token_type: "Bearer",
+      expires_in: issued.expiresIn,
+      single_use: true,
+      arguments_bound: Boolean(issued.claims.argumentsSha256),
+      scope: { gatewayId, method, name },
+      jti: issued.claims.jti,
+      warning: "Give this short-lived capability to the executor, not the long-lived gateway key.",
+    },
+    201,
+  );
 }
 
 async function proxyMcp(
@@ -321,46 +413,104 @@ async function proxyMcp(
     requestBytes,
   };
 
+  if (!operation.consistent) {
+    traceResult(env, ctx, startedAt, baseTrace, "operation_mismatch", 400, null);
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "operation_mismatch", statusCode: 400 });
+    return errorResponse(400, "operation_mismatch", "MCP headers disagree with the JSON-RPC request body", requestId);
+  }
+
   const token = bearerToken(request);
   if (!token) {
     traceResult(env, ctx, startedAt, baseTrace, "unauthorized", 401, null);
     applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", statusCode: 401 });
-    return errorResponse(401, "unauthorized", "A gateway agent key is required", requestId);
+    return errorResponse(401, "unauthorized", "A gateway agent key or capability is required", requestId);
   }
 
-  const auth = await getApiKeyForGateway(env.DB, gatewayId, await sha256Hex(token));
-  if (!auth) {
-    traceResult(env, ctx, startedAt, baseTrace, "unauthorized", 401, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", statusCode: 401 });
-    return errorResponse(401, "unauthorized", "Invalid or revoked gateway agent key", requestId);
+  let auth: ApiKeyAuthRow | null = null;
+  let capability: CapabilityClaims | null = null;
+  let authMode: "agent_key" | "capability" = "agent_key";
+
+  if (isCapabilityToken(token)) {
+    authMode = "capability";
+    try {
+      capability = await verifyCapabilityToken(env.CAPABILITY_SIGNING_KEY, token);
+    } catch (error) {
+      traceResult(env, ctx, startedAt, baseTrace, "capability_invalid", 401, null);
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_invalid", statusCode: 401, authMode });
+      return errorResponse(401, "invalid_capability", error instanceof Error ? error.message : "Invalid capability", requestId);
+    }
+
+    if (capability.gatewayId !== gatewayId || capability.method !== operation.method || capability.name !== operation.name) {
+      traceResult(env, ctx, startedAt, baseTrace, "capability_scope_denied", 403, null);
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_scope_denied", statusCode: 403, authMode });
+      return errorResponse(403, "capability_scope_denied", "Request does not match the capability scope", requestId);
+    }
+    if (capability.argumentsSha256) {
+      if (!operation.hasArguments || !(await capabilityArgumentsMatch(capability, operation.arguments))) {
+        traceResult(env, ctx, startedAt, baseTrace, "capability_arguments_denied", 403, null);
+        applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_arguments_denied", statusCode: 403, authMode });
+        return errorResponse(403, "capability_arguments_denied", "Request arguments do not match the capability", requestId);
+      }
+    }
+
+    auth = await getApiKeyByIdForGateway(env.DB, gatewayId, capability.apiKeyId);
+    if (!auth || auth.account_id !== capability.accountId || capability.accountId !== gateway.account_id) {
+      traceResult(env, ctx, startedAt, baseTrace, "capability_parent_invalid", 401, null);
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_parent_invalid", statusCode: 401, authMode });
+      return errorResponse(401, "invalid_capability", "The capability's parent agent key is invalid or revoked", requestId);
+    }
+  } else {
+    auth = await getApiKeyForGateway(env.DB, gatewayId, await sha256Hex(token));
+    if (!auth) {
+      traceResult(env, ctx, startedAt, baseTrace, "unauthorized", 401, null);
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "unauthorized", statusCode: 401, authMode });
+      return errorResponse(401, "unauthorized", "Invalid or revoked gateway agent key", requestId);
+    }
   }
+
   baseTrace.apiKeyId = auth.key_id;
 
   if (!subscriptionAllowsTraffic(auth.plan, auth.subscription_status)) {
     traceResult(env, ctx, startedAt, baseTrace, "subscription_blocked", 402, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "subscription_blocked", statusCode: 402 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "subscription_blocked", statusCode: 402, authMode });
     return errorResponse(402, "subscription_inactive", "The subscription for this gateway is inactive", requestId);
   }
 
   const policy = parsePolicy(auth.allowed_methods, auth.allowed_names);
   if (!evaluatePolicy(policy, operation.method, operation.name)) {
     traceResult(env, ctx, startedAt, baseTrace, "policy_denied", 403, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "policy_denied", statusCode: 403 });
-    return errorResponse(403, "policy_denied", "This agent key is not allowed to perform the requested MCP operation", requestId);
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "policy_denied", statusCode: 403, authMode });
+    return errorResponse(403, "policy_denied", "This credential is not allowed to perform the requested MCP operation", requestId);
   }
 
   const limiter = auth.plan === "free" ? env.FREE_RATE_LIMITER : env.PAID_RATE_LIMITER;
   const limited = await limiter.limit({ key: `${auth.account_id}:${auth.key_id}:${gatewayId}` });
   if (!limited.success) {
     traceResult(env, ctx, startedAt, baseTrace, "rate_limited", 429, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "rate_limited", statusCode: 429 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "rate_limited", statusCode: 429, authMode });
     return errorResponse(429, "rate_limited", "Gateway request rate limit exceeded", requestId);
+  }
+
+  if (capability) {
+    let consumed: boolean;
+    try {
+      consumed = await consumeCapability(env.DB, capability);
+    } catch {
+      traceResult(env, ctx, startedAt, baseTrace, "replay_store_unavailable", 503, null);
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "replay_store_unavailable", statusCode: 503, authMode });
+      return errorResponse(503, "replay_store_unavailable", "Capability replay protection is unavailable", requestId);
+    }
+    if (!consumed) {
+      traceResult(env, ctx, startedAt, baseTrace, "capability_replayed", 401, null);
+      applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "capability_replayed", statusCode: 401, authMode });
+      return errorResponse(401, "capability_replayed", "Capability has already been used", requestId);
+    }
   }
 
   const metered = await consumeMonthlyRequest(env.DB, auth.account_id, auth.plan);
   if (!metered.allowed) {
     traceResult(env, ctx, startedAt, baseTrace, "quota_exceeded", 429, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "quota_exceeded", statusCode: 429 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "quota_exceeded", statusCode: 429, authMode });
     return errorResponse(
       429,
       "monthly_quota_exceeded",
@@ -393,12 +543,13 @@ async function proxyMcp(
     responseHeaders.delete("set-cookie");
     responseHeaders.delete("proxy-authenticate");
     responseHeaders.set("X-ContextGateway-Request-Id", requestId);
+    responseHeaders.set("X-ContextGateway-Auth-Mode", authMode);
     responseHeaders.set("Cache-Control", "no-store");
 
     const responseBytes = safeContentLength(upstream.headers);
     const decision = upstream.ok ? "allowed" : "upstream_error";
     traceResult(env, ctx, startedAt, baseTrace, decision, upstream.status, responseBytes);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision, statusCode: upstream.status });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision, statusCode: upstream.status, authMode });
 
     return new Response(upstream.body, {
       status: upstream.status,
@@ -407,7 +558,7 @@ async function proxyMcp(
     });
   } catch {
     traceResult(env, ctx, startedAt, baseTrace, "upstream_unreachable", 502, null);
-    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "upstream_unreachable", statusCode: 502 });
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "upstream_unreachable", statusCode: 502, authMode });
     return errorResponse(502, "upstream_unreachable", "The configured MCP server could not be reached", requestId);
   }
 }
@@ -421,6 +572,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContextLike): Pro
 
   if (url.pathname.startsWith("/v1/control/")) {
     return handleControlPlane(request, env, url.pathname);
+  }
+
+  const capabilityMatch = /^\/v1\/mcp\/([^/]+)\/capabilities$/.exec(url.pathname);
+  if (capabilityMatch) {
+    const gatewayId = decodeURIComponent(capabilityMatch[1]);
+    return issueCapability(request, env, gatewayId);
   }
 
   const gatewayMatch = /^\/v1\/mcp\/([^/]+)$/.exec(url.pathname);
