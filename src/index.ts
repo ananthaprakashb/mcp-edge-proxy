@@ -12,6 +12,7 @@ import {
 import { extractMcpOperation } from "./mcp";
 import { evaluatePolicy, normalizePolicyInput, parsePolicy } from "./policy";
 import { buildUpstreamHeaders, validateUpstreamHeaders, validateUpstreamUrl } from "./security";
+import { consumeMonthlyRequest } from "./usage";
 import type {
   Env,
   ExecutionContextLike,
@@ -354,6 +355,18 @@ async function proxyMcp(
     traceResult(env, ctx, startedAt, baseTrace, "rate_limited", 429, null);
     applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "rate_limited", statusCode: 429 });
     return errorResponse(429, "rate_limited", "Gateway request rate limit exceeded", requestId);
+  }
+
+  const metered = await consumeMonthlyRequest(env.DB, auth.account_id, auth.plan);
+  if (!metered.allowed) {
+    traceResult(env, ctx, startedAt, baseTrace, "quota_exceeded", 429, null);
+    applySpanAttributes(span, { gatewayId, method: operation.method, name: operation.name, decision: "quota_exceeded", statusCode: 429 });
+    return errorResponse(
+      429,
+      "monthly_quota_exceeded",
+      `${auth.plan} plan monthly request quota of ${metered.usage.limit} has been reached`,
+      requestId,
+    );
   }
 
   let injectedHeaders: Record<string, string> = {};
