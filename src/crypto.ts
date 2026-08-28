@@ -18,6 +18,12 @@ function base64UrlToBytes(value: string): Uint8Array {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 export async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
   return bytesToHex(new Uint8Array(digest));
@@ -47,7 +53,10 @@ async function importEncryptionKey(base64UrlKey: string): Promise<CryptoKey> {
   if (raw.byteLength !== 32) {
     throw new Error("UPSTREAM_ENCRYPTION_KEY must be a base64url-encoded 32-byte key");
   }
-  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  return crypto.subtle.importKey("raw", toArrayBuffer(raw), { name: "AES-GCM" }, false, [
+    "encrypt",
+    "decrypt",
+  ]);
 }
 
 export async function encryptString(
@@ -57,7 +66,7 @@ export async function encryptString(
   const key = await importEncryptionKey(base64UrlKey);
   const ivBytes = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: ivBytes },
+    { name: "AES-GCM", iv: toArrayBuffer(ivBytes) },
     key,
     encoder.encode(plaintext),
   );
@@ -74,9 +83,9 @@ export async function decryptString(
 ): Promise<string> {
   const key = await importEncryptionKey(base64UrlKey);
   const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64UrlToBytes(iv) },
+    { name: "AES-GCM", iv: toArrayBuffer(base64UrlToBytes(iv)) },
     key,
-    base64UrlToBytes(ciphertext),
+    toArrayBuffer(base64UrlToBytes(ciphertext)),
   );
   return decoder.decode(plaintext);
 }
