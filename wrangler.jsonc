@@ -1,13 +1,20 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "contextgateway-edge",
-  "main": "src/index.ts",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-08-27",
   "secrets": {
     "required": [
       "CONTROL_PLANE_TOKEN",
-      "UPSTREAM_ENCRYPTION_KEY"
+      "UPSTREAM_ENCRYPTION_KEY",
+      "BETTER_AUTH_SECRET"
     ]
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/v1/*", "/healthz"]
   },
   "observability": {
     "enabled": true,

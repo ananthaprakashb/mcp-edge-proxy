@@ -13,6 +13,7 @@ export interface D1PreparedStatement {
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
 }
 
 export interface RateLimit {
@@ -38,6 +39,12 @@ export interface Env {
   PAID_RATE_LIMITER: RateLimit;
   CONTROL_PLANE_TOKEN: string;
   UPSTREAM_ENCRYPTION_KEY: string;
+  BETTER_AUTH_SECRET: string;
+  BETTER_AUTH_URL?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
   ALLOW_INSECURE_UPSTREAMS?: string;
 }
 
