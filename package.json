@@ -1,0 +1,23 @@
+{
+  "name": "contextgateway-edge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Privacy-first MCP edge policy and observability gateway",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply contextgateway --local",
+    "db:migrate:remote": "wrangler d1 migrations apply contextgateway --remote"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.0",
+    "wrangler": "^4.126.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

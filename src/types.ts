@@ -1,0 +1,89 @@
+export interface D1Result<T = unknown> {
+  success: boolean;
+  results?: T[];
+  meta?: Record<string, unknown>;
+}
+
+export interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<D1Result<T>>;
+  run<T = unknown>(): Promise<D1Result<T>>;
+}
+
+export interface D1Database {
+  prepare(query: string): D1PreparedStatement;
+}
+
+export interface RateLimit {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
+export interface TraceSpan {
+  setAttribute(key: string, value: string | number | boolean | undefined): void;
+}
+
+export interface Tracing {
+  enterSpan<T>(name: string, callback: (span: TraceSpan) => T | Promise<T>): T | Promise<T>;
+}
+
+export interface ExecutionContextLike {
+  waitUntil(promise: Promise<unknown>): void;
+  tracing?: Tracing;
+}
+
+export interface Env {
+  DB: D1Database;
+  FREE_RATE_LIMITER: RateLimit;
+  PAID_RATE_LIMITER: RateLimit;
+  CONTROL_PLANE_TOKEN: string;
+  UPSTREAM_ENCRYPTION_KEY: string;
+  ALLOW_INSECURE_UPSTREAMS?: string;
+}
+
+export type Plan = "free" | "pro" | "team";
+export type SubscriptionStatus = "free" | "trialing" | "active" | "past_due" | "canceled";
+
+export interface AccountRow {
+  id: string;
+  name: string;
+  plan: Plan;
+  subscription_status: SubscriptionStatus;
+  billing_customer_id: string | null;
+  billing_subscription_id: string | null;
+}
+
+export interface GatewayRow {
+  id: string;
+  account_id: string;
+  name: string;
+  upstream_url: string;
+  upstream_headers_ciphertext: string | null;
+  upstream_headers_iv: string | null;
+  enabled: number;
+}
+
+export interface ApiKeyAuthRow {
+  key_id: string;
+  account_id: string;
+  gateway_id: string;
+  allowed_methods: string;
+  allowed_names: string;
+  plan: Plan;
+  subscription_status: SubscriptionStatus;
+}
+
+export interface TraceRecord {
+  id: string;
+  accountId: string;
+  gatewayId: string;
+  apiKeyId: string | null;
+  requestId: string;
+  mcpMethod: string | null;
+  mcpName: string | null;
+  decision: string;
+  statusCode: number;
+  durationMs: number;
+  requestBytes: number | null;
+  responseBytes: number | null;
+}
