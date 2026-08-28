@@ -45,6 +45,10 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_PRO_PRICE_ID?: string;
+  STRIPE_TEAM_PRICE_ID?: string;
   ALLOW_INSECURE_UPSTREAMS?: string;
 }
 
@@ -58,6 +62,9 @@ export interface AccountRow {
   subscription_status: SubscriptionStatus;
   billing_customer_id: string | null;
   billing_subscription_id: string | null;
+  billing_price_id: string | null;
+  billing_period_end: string | null;
+  billing_cancel_at_period_end: number;
 }
 
 export interface GatewayRow {
