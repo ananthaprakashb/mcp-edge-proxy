@@ -19,7 +19,7 @@
     {
       "binding": "DB",
       "database_name": "mcp-context",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "139c3fd4-bbcb-41b6-868c-0fa6f589ab02",
       "migrations_dir": "migrations"
     }
   ],
