@@ -38,6 +38,12 @@ function signingKeyBytes(signingKey: string): Uint8Array {
   return encoder.encode(signingKey);
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -57,7 +63,7 @@ function randomId(): string {
 
 async function hmacSha256(signingKey: string, value: string): Promise<Uint8Array> {
   const raw = signingKeyBytes(signingKey);
-  const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey("raw", toArrayBuffer(raw), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(value));
   return new Uint8Array(signature);
 }
@@ -165,12 +171,10 @@ export async function capabilityArgumentsMatch(claims: CapabilityClaims, value: 
 
 export async function consumeCapability(db: D1Database, claims: CapabilityClaims): Promise<boolean> {
   const now = Math.floor(Date.now() / 1000);
-  // Keep the replay table bounded without making cleanup availability part of
-  // the authorization decision. The insert below remains the fail-closed step.
   try {
     await db.prepare(`DELETE FROM capability_replays WHERE expires_at < ?`).bind(now - 3600).run();
   } catch {
-    // Ignore cleanup failure; the atomic insert still determines authorization.
+    // Cleanup is opportunistic; the atomic insert below remains fail-closed.
   }
 
   const result = await db
