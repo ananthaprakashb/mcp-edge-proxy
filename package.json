@@ -1,11 +1,12 @@
 {
   "name": "contextgateway-edge",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Privacy-first MCP edge policy and observability gateway",
   "type": "module",
   "scripts": {
     "dev": "npm run build && wrangler dev",
+    "dev:scheduled": "npm run build && wrangler dev --test-scheduled",
     "dev:ui": "vite",
     "build": "vite build",
     "deploy": "npm run build && wrangler deploy",
