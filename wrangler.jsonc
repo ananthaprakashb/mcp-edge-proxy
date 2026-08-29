@@ -9,6 +9,9 @@
       "custom_domain": true
     }
   ],
+  "vars": {
+    "BETTER_AUTH_URL": "https://contextgateway.sharecapsule.org"
+  },
   "secrets": {
     "required": [
       "CONTROL_PLANE_TOKEN",
