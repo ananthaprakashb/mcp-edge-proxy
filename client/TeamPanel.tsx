@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "./api";
+import { SecurityPanel } from "./SecurityPanel";
 
 type WorkspaceRole = "owner" | "admin" | "member";
 type InvitableRole = "admin" | "member";
@@ -156,5 +157,7 @@ export function TeamPanel({ workspace }: Props) {
         <td><strong>{invite.email}</strong></td><td><span className="badge">{invite.role}</span></td><td>{invite.invited_by_name || "—"}</td><td>{utcDate(invite.expires_at).toLocaleString()}</td><td>{workspace.role === "owner" || invite.role === "member" ? <button className="danger-link" onClick={() => revokeInvite(invite.id)}>Revoke</button> : "—"}</td>
       </tr>)}</tbody></table></div>}
     </div>}
+
+    <SecurityPanel workspace={workspace} />
   </section>;
 }
