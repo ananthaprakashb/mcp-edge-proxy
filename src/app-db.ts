@@ -73,6 +73,7 @@ export async function listWorkspaceGateways(db: D1Database, accountId: string): 
   const result = await db
     .prepare(
       `SELECT g.id, g.name, g.upstream_url, g.connection_mode, g.enabled, g.created_at,
+              g.upstream_secret_version, g.credentials_rotated_at,
               COUNT(k.id) AS key_count,
               SUM(CASE WHEN k.revoked_at IS NULL THEN 1 ELSE 0 END) AS active_key_count
        FROM gateways g
@@ -93,12 +94,32 @@ export async function listGatewayKeys(
 ): Promise<Record<string, unknown>[]> {
   const result = await db
     .prepare(
-      `SELECT id, name, key_prefix, allowed_methods, allowed_names, execution_mode, revoked_at, created_at
-       FROM api_keys
-       WHERE account_id = ? AND gateway_id = ?
-       ORDER BY created_at DESC`,
+      `SELECT k.id, k.name, k.key_prefix, k.allowed_methods, k.allowed_names, k.execution_mode,
+              k.revoked_at, k.created_at, k.secret_version, k.secret_rotated_at,
+              (SELECT MAX(valid_until) FROM api_key_secrets s
+               WHERE s.api_key_id = k.id AND s.version < k.secret_version AND s.revoked_at IS NULL)
+                AS previous_secret_valid_until
+       FROM api_keys k
+       WHERE k.account_id = ? AND k.gateway_id = ?
+       ORDER BY k.created_at DESC`,
     )
     .bind(accountId, gatewayId)
+    .all<Record<string, unknown>>();
+  return result.results ?? [];
+}
+
+export async function listSecurityEvents(db: D1Database, accountId: string, limit = 100): Promise<Record<string, unknown>[]> {
+  const result = await db
+    .prepare(
+      `SELECT e.id, e.event_type, e.target_type, e.target_id, e.metadata_json, e.created_at,
+              u.name AS actor_name, u.email AS actor_email
+       FROM security_events e
+       LEFT JOIN "user" u ON u.id = e.actor_user_id
+       WHERE e.account_id = ?
+       ORDER BY e.created_at DESC
+       LIMIT ?`,
+    )
+    .bind(accountId, limit)
     .all<Record<string, unknown>>();
   return result.results ?? [];
 }
