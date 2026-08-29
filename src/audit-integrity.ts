@@ -3,8 +3,6 @@ import { sha256Hex } from "./crypto";
 export interface AuditHashFields {
   id: string;
   accountId: string;
-  workspaceId: string | null;
-  actorUserId: string | null;
   eventType: string;
   targetType: string;
   targetId: string;
@@ -34,8 +32,6 @@ export function auditHashPayload(fields: AuditHashFields): string {
   return canonicalJson({
     id: fields.id,
     accountId: fields.accountId,
-    workspaceId: fields.workspaceId,
-    actorUserId: fields.actorUserId,
     eventType: fields.eventType,
     targetType: fields.targetType,
     targetId: fields.targetId,
