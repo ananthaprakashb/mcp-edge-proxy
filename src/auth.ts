@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { passwordResetEmailConfigured, sendPasswordResetEmail } from "./email";
-import type { Env } from "./types";
+import type { Env, ExecutionContextLike } from "./types";
 
 export function authProviderAvailability(env: Env): { github: boolean; google: boolean } {
   return {
@@ -9,7 +9,7 @@ export function authProviderAvailability(env: Env): { github: boolean; google: b
   };
 }
 
-export function createAuth(env: Env, request: Request) {
+export function createAuth(env: Env, request: Request, ctx?: ExecutionContextLike) {
   const baseURL = (env.BETTER_AUTH_URL || new URL(request.url).origin).replace(/\/$/, "");
 
   return betterAuth({
@@ -27,14 +27,16 @@ export function createAuth(env: Env, request: Request) {
           console.error("ContextGateway password reset email delivery is not configured");
           return;
         }
+
         const delivery = sendPasswordResetEmail(env, user.email, url).catch(() => {
           console.error("ContextGateway password reset email delivery failed");
         });
-        void import("cloudflare:workers")
-          .then(({ waitUntil }) => waitUntil(delivery))
-          .catch(() => {
-            void delivery;
-          });
+
+        if (ctx) {
+          ctx.waitUntil(delivery);
+        } else {
+          void delivery;
+        }
       },
     },
     socialProviders: {
