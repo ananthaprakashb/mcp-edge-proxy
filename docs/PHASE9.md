@@ -63,9 +63,9 @@ Wrangler config contains two Cron triggers:
 - `*/15 * * * *` — bounded health probe batch
 - `17 8 * * *` — existing Phase 8 daily retention lifecycle
 
-The scheduled health pass selects the six enabled gateways with the oldest `last_health_checked_at`. This naturally forms a round-robin queue without a separate cursor table.
+The scheduled health pass selects the five enabled gateways with the oldest `last_health_checked_at`. This naturally forms a round-robin queue without a separate cursor table.
 
-Six is intentionally conservative for Workers Free. Each gateway may require four Cloudflare DNS-over-HTTPS subrequests (two A/AAAA resolution passes) plus one upstream HEAD request.
+Five is intentionally conservative for Workers Free. A normal gateway check can use four Cloudflare DNS-over-HTTPS subrequests (two A/AAAA resolution passes) plus one upstream HEAD request. A redirect can add another four DNS validation subrequests, so five gateways keeps the worst-case external subrequest count below the Free-plan ceiling.
 
 ## Health history
 
