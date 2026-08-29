@@ -1,3 +1,4 @@
+import { appendSecurityEvent, type SecurityEventInput } from "./audit-db";
 import type { AccountRow, ApiKeyAuthRow, D1Database, ExecutionMode, GatewayRow, TraceRecord, UpstreamConnectionMode } from "./types";
 
 export async function createAccount(
@@ -225,35 +226,8 @@ export async function revokeApiKey(db: D1Database, keyId: string): Promise<void>
   ]);
 }
 
-export async function insertSecurityEvent(
-  db: D1Database,
-  event: {
-    accountId: string;
-    workspaceId?: string | null;
-    actorUserId?: string | null;
-    eventType: string;
-    targetType: string;
-    targetId: string;
-    metadata?: Record<string, unknown>;
-  },
-): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO security_events
-       (id, account_id, workspace_id, actor_user_id, event_type, target_type, target_id, metadata_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      crypto.randomUUID(),
-      event.accountId,
-      event.workspaceId ?? null,
-      event.actorUserId ?? null,
-      event.eventType,
-      event.targetType,
-      event.targetId,
-      JSON.stringify(event.metadata ?? {}),
-    )
-    .run();
+export async function insertSecurityEvent(db: D1Database, event: SecurityEventInput): Promise<void> {
+  await appendSecurityEvent(db, event);
 }
 
 export async function insertTrace(db: D1Database, trace: TraceRecord): Promise<void> {
