@@ -1,0 +1,45 @@
+/* ContextGateway brand mark derived from the approved generated gateway/shield/G logo. */
+.brand-symbol {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  border-color: rgba(71, 152, 205, .45);
+  background: #07111c;
+  box-shadow: 0 12px 36px rgba(0, 25, 43, .4);
+}
+
+.brand-symbol::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("/contextgateway-logo.svg") center / cover no-repeat;
+}
+
+.brand-symbol .icon {
+  display: none;
+}
+
+.recovery-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.recovery-brand::before {
+  content: "";
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 10px;
+  background: url("/contextgateway-logo.svg") center / cover no-repeat;
+  box-shadow: 0 8px 24px rgba(0, 25, 43, .28);
+}
+
+@media (max-width: 620px) {
+  .recovery-brand::before {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+    border-radius: 9px;
+  }
+}
