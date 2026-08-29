@@ -1,4 +1,3 @@
-import { waitUntil } from "cloudflare:workers";
 import { betterAuth } from "better-auth";
 import { passwordResetEmailConfigured, sendPasswordResetEmail } from "./email";
 import type { Env } from "./types";
@@ -28,11 +27,14 @@ export function createAuth(env: Env, request: Request) {
           console.error("ContextGateway password reset email delivery is not configured");
           return;
         }
-        waitUntil(
-          sendPasswordResetEmail(env, user.email, url).catch(() => {
-            console.error("ContextGateway password reset email delivery failed");
-          }),
-        );
+        const delivery = sendPasswordResetEmail(env, user.email, url).catch(() => {
+          console.error("ContextGateway password reset email delivery failed");
+        });
+        void import("cloudflare:workers")
+          .then(({ waitUntil }) => waitUntil(delivery))
+          .catch(() => {
+            void delivery;
+          });
       },
     },
     socialProviders: {
