@@ -35,6 +35,11 @@ type Props = {
   workspace: { id: string; role: WorkspaceRole; plan: "free" | "pro" | "team" };
 };
 
+function utcDate(value: string): Date {
+  if (value.endsWith("Z")) return new Date(value);
+  return new Date(`${value.replace(" ", "T")}Z`);
+}
+
 export function TeamPanel({ workspace }: Props) {
   const [data, setData] = useState<TeamData | null>(null);
   const [email, setEmail] = useState("");
@@ -140,7 +145,7 @@ export function TeamPanel({ workspace }: Props) {
       <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Joined</th><th>Actions</th></tr></thead><tbody>{data.members.map((member) => <tr key={member.user_id}>
         <td><strong>{member.name}</strong><small>{member.email}</small></td>
         <td>{workspace.role === "owner" && member.role !== "owner" ? <select value={member.role} onChange={(e) => void changeRole(member.user_id, e.target.value as InvitableRole)}><option value="member">Member</option><option value="admin">Admin</option></select> : <span className={`badge ${member.role === "owner" ? "good" : member.role === "admin" ? "warn" : ""}`}>{member.role}</span>}</td>
-        <td>{new Date(member.created_at + (member.created_at.endsWith("Z") ? "" : "Z")).toLocaleDateString()}</td>
+        <td>{utcDate(member.created_at).toLocaleDateString()}</td>
         <td>{member.role !== "owner" && ((workspace.role === "owner") || (workspace.role === "admin" && member.role === "member")) ? <button className="danger-link" onClick={() => removeMember(member.user_id, member.name)}>Remove</button> : "—"}</td>
       </tr>)}</tbody></table></div>
     </div>
@@ -148,7 +153,7 @@ export function TeamPanel({ workspace }: Props) {
     {manager && <div className="panel">
       <div className="panel-head"><div><h3>Pending invitations</h3><p>The invitation token is never displayed again after creation. Revoke and recreate an invite if its link is lost.</p></div></div>
       {!data.invites.length ? <div className="table-empty">No pending invitations.</div> : <div className="table-wrap"><table><thead><tr><th>Email</th><th>Role</th><th>Invited by</th><th>Expires</th><th>Action</th></tr></thead><tbody>{data.invites.map((invite) => <tr key={invite.id}>
-        <td><strong>{invite.email}</strong></td><td><span className="badge">{invite.role}</span></td><td>{invite.invited_by_name || "—"}</td><td>{new Date(invite.expires_at).toLocaleString()}</td><td>{workspace.role === "owner" || invite.role === "member" ? <button className="danger-link" onClick={() => revokeInvite(invite.id)}>Revoke</button> : "—"}</td>
+        <td><strong>{invite.email}</strong></td><td><span className="badge">{invite.role}</span></td><td>{invite.invited_by_name || "—"}</td><td>{utcDate(invite.expires_at).toLocaleString()}</td><td>{workspace.role === "owner" || invite.role === "member" ? <button className="danger-link" onClick={() => revokeInvite(invite.id)}>Revoke</button> : "—"}</td>
       </tr>)}</tbody></table></div>}
     </div>}
   </section>;
