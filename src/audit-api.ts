@@ -1,4 +1,4 @@
-import { verifyAuditChain } from "./audit-db";
+import { ensureAuditChainBackfilled, verifyAuditChain } from "./audit-db";
 import { getWorkspaceMembership } from "./app-db";
 import { createAuth } from "./auth";
 import { getRetentionSummary, runRetentionLifecycle } from "./retention";
@@ -55,6 +55,7 @@ async function listAuditEvents(
   url: URL,
   maximum: number,
 ): Promise<Record<string, unknown>[]> {
+  await ensureAuditChainBackfilled(db, accountId);
   const conditions = ["e.account_id = ?"];
   const values: unknown[] = [accountId];
   const eventType = url.searchParams.get("eventType");
@@ -65,8 +66,8 @@ async function listAuditEvents(
   if (eventType) { conditions.push("e.event_type = ?"); values.push(eventType); }
   if (targetType) { conditions.push("e.target_type = ?"); values.push(targetType); }
   if (actorUserId) { conditions.push("e.actor_user_id = ?"); values.push(actorUserId); }
-  if (from) { conditions.push("e.created_at >= ?"); values.push(from); }
-  if (to) { conditions.push("e.created_at <= ?"); values.push(to); }
+  if (from) { conditions.push("datetime(e.created_at) >= datetime(?)"); values.push(from); }
+  if (to) { conditions.push("datetime(e.created_at) <= datetime(?)"); values.push(to); }
   const limit = parseLimit(url.searchParams.get("limit"), Math.min(100, maximum), maximum);
   values.push(limit);
 
@@ -78,7 +79,7 @@ async function listAuditEvents(
        FROM security_events e
        LEFT JOIN "user" u ON u.id = e.actor_user_id
        WHERE ${conditions.join(" AND ")}
-       ORDER BY e.created_at DESC, e.id DESC
+       ORDER BY datetime(e.created_at) DESC, e.id DESC
        LIMIT ?`,
     )
     .bind(...values)
