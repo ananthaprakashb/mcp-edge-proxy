@@ -1,6 +1,6 @@
 {
   "name": "contextgateway-edge",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Privacy-first MCP edge policy and observability gateway",
   "type": "module",
@@ -15,6 +15,7 @@
     "smoke:production": "node scripts/smoke-production.mjs",
     "smoke:capabilities": "node scripts/smoke-capabilities.mjs",
     "smoke:capability-required": "node scripts/smoke-capability-required.mjs",
+    "smoke:context": "node scripts/smoke-governed-context.mjs",
     "smoke:private-access": "node scripts/smoke-private-access.mjs",
     "private:echo": "node scripts/private-mcp-echo.mjs",
     "db:info": "wrangler d1 info mcp-context",
@@ -24,7 +25,8 @@
   "dependencies": {
     "better-auth": "^1.7.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@types/react": "^19.1.10",
