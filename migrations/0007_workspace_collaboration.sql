@@ -35,3 +35,25 @@ BEGIN
   SET expires_at = datetime(NEW.expires_at)
   WHERE id = NEW.id;
 END;
+
+-- API checks reserve pending seats. This trigger is the final race-safe guardrail that prevents
+-- the actual member count from ever exceeding the plan limit, including after a plan downgrade.
+CREATE TRIGGER IF NOT EXISTS enforce_workspace_member_plan_limit
+BEFORE INSERT ON workspace_members
+FOR EACH ROW
+WHEN (
+  SELECT COUNT(*) FROM workspace_members WHERE workspace_id = NEW.workspace_id
+) >= COALESCE((
+  SELECT CASE a.plan
+    WHEN 'free' THEN 1
+    WHEN 'pro' THEN 3
+    WHEN 'team' THEN 15
+    ELSE 1
+  END
+  FROM workspaces w
+  JOIN accounts a ON a.id = w.account_id
+  WHERE w.id = NEW.workspace_id
+), 1)
+BEGIN
+  SELECT RAISE(ABORT, 'workspace_member_plan_limit');
+END;
