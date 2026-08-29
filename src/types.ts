@@ -50,6 +50,8 @@ export interface Env {
   CAPABILITY_SIGNING_KEY: string;
   CAPABILITY_SIGNING_KEYRING?: string;
   BETTER_AUTH_URL?: string;
+  RESEND_API_KEY?: string;
+  AUTH_EMAIL_FROM?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   GOOGLE_CLIENT_ID?: string;
