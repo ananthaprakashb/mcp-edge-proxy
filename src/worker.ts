@@ -7,6 +7,8 @@ import { insertSecurityEvent } from "./db";
 import edgeWorker from "./index";
 import { capabilitySigningKeyring, upstreamEncryptionKeyring } from "./keyring";
 import {
+  assertStaticNetworkTarget,
+  classifyIpAddress,
   validateRedirectTarget,
   validateResolvedNetworkTarget,
   type NetworkValidationResult,
@@ -19,6 +21,12 @@ interface GatewayNetworkContext {
   account_id: string;
   upstream_url: string;
   connection_mode: UpstreamConnectionMode;
+}
+
+interface StaticGatewayConfigurationBlock {
+  workspaceId: string;
+  connectionMode: UpstreamConnectionMode;
+  validation: NetworkValidationResult;
 }
 
 function bearerToken(request: Request): string | null {
@@ -54,6 +62,93 @@ function networkBlockResponse(validation: NetworkValidationResult, eventType: st
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
       "x-contextgateway-security-reason": validation.reason ?? eventType,
+    },
+  });
+}
+
+async function inspectStaticGatewayConfiguration(
+  request: Request,
+  path: string,
+): Promise<StaticGatewayConfigurationBlock | null> {
+  const match = /^\/v1\/app\/workspaces\/([^/]+)\/gateways$/.exec(path);
+  if (request.method !== "POST" || !match) return null;
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed = await request.clone().json() as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  if (typeof body.upstreamUrl !== "string" || !body.upstreamUrl.trim()) return null;
+  let target: URL;
+  try {
+    target = new URL(body.upstreamUrl);
+  } catch {
+    return null;
+  }
+
+  try {
+    assertStaticNetworkTarget(target.hostname);
+    return null;
+  } catch {
+    const hostname = target.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    const classification = classifyIpAddress(hostname);
+    return {
+      workspaceId: decodeURIComponent(match[1]),
+      connectionMode: body.connectionMode === "cloudflare_access" ? "cloudflare_access" : "public",
+      validation: {
+        allowed: false,
+        hostname,
+        addresses: classification ? [hostname] : [],
+        reason: classification ? "blocked_ip_literal" : "blocked_hostname",
+        ...(classification ? { blockedAddress: hostname } : {}),
+      },
+    };
+  }
+}
+
+async function auditStaticGatewayConfigurationBlock(
+  request: Request,
+  env: Env,
+  block: StaticGatewayConfigurationBlock,
+): Promise<void> {
+  const session = await createAuth(env, request).api.getSession({ headers: request.headers });
+  if (!session?.user) return;
+
+  const membership = await env.DB
+    .prepare(
+      `SELECT w.account_id, m.role
+       FROM workspace_members m
+       JOIN workspaces w ON w.id = m.workspace_id
+       WHERE w.id = ? AND m.user_id = ?`,
+    )
+    .bind(block.workspaceId, session.user.id)
+    .first<{ account_id: string; role: string }>();
+  if (!membership || (membership.role !== "owner" && membership.role !== "admin")) return;
+
+  const eventType = networkEventType(block.validation);
+  const classification = block.validation.blockedAddress
+    ? classifyIpAddress(block.validation.blockedAddress)
+    : null;
+  await insertSecurityEvent(env.DB, {
+    accountId: membership.account_id,
+    workspaceId: block.workspaceId,
+    actorUserId: session.user.id,
+    eventType,
+    targetType: "gateway_configuration",
+    targetId: "rejected",
+    metadata: {
+      phase: "configuration_static",
+      host: block.validation.hostname,
+      reason: block.validation.reason,
+      blockedAddress: block.validation.blockedAddress ?? null,
+      blockedCategory: classification?.category ?? null,
+      resolvedAddresses: [],
+      changedBetweenChecks: false,
+      connectionMode: block.connectionMode,
     },
   });
 }
@@ -257,11 +352,15 @@ export default {
       if (collaboration) return collaboration;
 
       const gatewayCreate = request.method === "POST" && /^\/v1\/app\/workspaces\/[^/]+\/gateways$/.test(path);
+      const staticBlock = gatewayCreate ? await inspectStaticGatewayConfiguration(request, path) : null;
       const runtimeEnv = gatewayCreate
         ? { ...env, UPSTREAM_ENCRYPTION_KEY: upstreamEncryptionKeyring(env).keys[upstreamEncryptionKeyring(env).activeVersion] }
         : env;
       const response = await handleAppApi(request, runtimeEnv, path);
       if (gatewayCreate) {
+        if (staticBlock && response.status === 400) {
+          await auditStaticGatewayConfigurationBlock(request, env, staticBlock).catch(() => undefined);
+        }
         const blocked = await validateCreatedGateway(response, env, ctx);
         if (blocked) return blocked;
         await markCreatedGatewayVersion(response, env);
