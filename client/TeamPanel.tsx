@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "./api";
+import { ContextPanel } from "./ContextPanel";
 import { GatewayHealthPanel } from "./GatewayHealthPanel";
 import { SecurityPanel } from "./SecurityPanel";
 
@@ -159,6 +160,7 @@ export function TeamPanel({ workspace }: Props) {
       </tr>)}</tbody></table></div>}
     </div>}
 
+    <ContextPanel workspace={workspace} />
     <GatewayHealthPanel workspace={workspace} />
     <SecurityPanel workspace={workspace} />
   </section>;
