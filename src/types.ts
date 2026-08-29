@@ -33,6 +33,12 @@ export interface ExecutionContextLike {
   tracing?: Tracing;
 }
 
+export interface ScheduledControllerLike {
+  scheduledTime: number;
+  cron: string;
+  noRetry?(): void;
+}
+
 export interface Env {
   DB: D1Database;
   FREE_RATE_LIMITER: RateLimit;
