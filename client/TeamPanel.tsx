@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "./api";
+import { GatewayHealthPanel } from "./GatewayHealthPanel";
 import { SecurityPanel } from "./SecurityPanel";
 
 type WorkspaceRole = "owner" | "admin" | "member";
@@ -158,6 +159,7 @@ export function TeamPanel({ workspace }: Props) {
       </tr>)}</tbody></table></div>}
     </div>}
 
+    <GatewayHealthPanel workspace={workspace} />
     <SecurityPanel workspace={workspace} />
   </section>;
 }
