@@ -1,5 +1,5 @@
 import { computeAuditEventHash } from "./audit-integrity";
-import type { D1Database } from "./types";
+import type { D1Database, D1PreparedStatement } from "./types";
 
 export interface SecurityEventInput {
   accountId: string;
@@ -97,7 +97,7 @@ export async function ensureAuditChainBackfilled(db: D1Database, accountId: stri
                 metadata_json, created_at, chain_sequence, previous_hash, event_hash
          FROM security_events
          WHERE account_id = ? AND event_hash IS NULL
-         ORDER BY created_at ASC, id ASC
+         ORDER BY datetime(created_at) ASC, id ASC
          LIMIT 100`,
       )
       .bind(accountId)
@@ -105,7 +105,7 @@ export async function ensureAuditChainBackfilled(db: D1Database, accountId: stri
     const rows = result.results ?? [];
     if (!rows.length) return;
 
-    const statements = [];
+    const statements: D1PreparedStatement[] = [];
     for (const row of rows) {
       const sequence = head.sequence + 1;
       const previousHash = head.hash;
@@ -261,7 +261,7 @@ export async function pruneAuditEventsBefore(
     .prepare(
       `SELECT chain_sequence, event_hash
        FROM security_events
-       WHERE account_id = ? AND created_at < ?
+       WHERE account_id = ? AND datetime(created_at) < datetime(?)
        ORDER BY chain_sequence DESC
        LIMIT 1`,
     )
@@ -270,7 +270,7 @@ export async function pruneAuditEventsBefore(
   if (!lastDeleted) return 0;
 
   const count = await db
-    .prepare(`SELECT COUNT(*) AS count FROM security_events WHERE account_id = ? AND created_at < ?`)
+    .prepare(`SELECT COUNT(*) AS count FROM security_events WHERE account_id = ? AND datetime(created_at) < datetime(?)`)
     .bind(accountId, cutoff)
     .first<{ count: number }>();
 
@@ -286,7 +286,7 @@ export async function pruneAuditEventsBefore(
       )
       .bind(accountId, Number(lastDeleted.chain_sequence), lastDeleted.event_hash),
     db
-      .prepare(`DELETE FROM security_events WHERE account_id = ? AND created_at < ?`)
+      .prepare(`DELETE FROM security_events WHERE account_id = ? AND datetime(created_at) < datetime(?)`)
       .bind(accountId, cutoff),
   ]);
 
