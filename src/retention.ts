@@ -28,7 +28,7 @@ export function retentionCutoff(nowMs: number, days: number): string {
 
 async function countBefore(db: D1Database, table: "traces" | "security_events", accountId: string, cutoff: string): Promise<number> {
   const row = await db
-    .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE account_id = ? AND created_at < ?`)
+    .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE account_id = ? AND datetime(created_at) < datetime(?)`)
     .bind(accountId, cutoff)
     .first<{ count: number }>();
   return Number(row?.count ?? 0);
@@ -37,7 +37,10 @@ async function countBefore(db: D1Database, table: "traces" | "security_events", 
 async function deleteTracesBefore(db: D1Database, accountId: string, cutoff: string): Promise<number> {
   const count = await countBefore(db, "traces", accountId, cutoff);
   if (!count) return 0;
-  await db.prepare(`DELETE FROM traces WHERE account_id = ? AND created_at < ?`).bind(accountId, cutoff).run();
+  await db
+    .prepare(`DELETE FROM traces WHERE account_id = ? AND datetime(created_at) < datetime(?)`)
+    .bind(accountId, cutoff)
+    .run();
   return count;
 }
 
@@ -216,7 +219,7 @@ export async function runRetentionLifecycle(
      FROM accounts a
      LEFT JOIN workspaces w ON w.account_id = a.id
      ${conditions}
-     ORDER BY a.created_at ASC`,
+     ORDER BY datetime(a.created_at) ASC`,
   );
   const result = options.accountId
     ? await statement.bind(options.accountId).all<AccountRetentionRow>()
@@ -233,11 +236,11 @@ export async function getRetentionSummary(db: D1Database, accountId: string, pla
   const entitlement = getPlanEntitlements(plan);
   const [traceStats, auditStats, lastRun, verification] = await Promise.all([
     db
-      .prepare(`SELECT COUNT(*) AS count, MIN(created_at) AS oldest FROM traces WHERE account_id = ?`)
+      .prepare(`SELECT COUNT(*) AS count, MIN(datetime(created_at)) AS oldest FROM traces WHERE account_id = ?`)
       .bind(accountId)
       .first<{ count: number; oldest: string | null }>(),
     db
-      .prepare(`SELECT COUNT(*) AS count, MIN(created_at) AS oldest FROM security_events WHERE account_id = ?`)
+      .prepare(`SELECT COUNT(*) AS count, MIN(datetime(created_at)) AS oldest FROM security_events WHERE account_id = ?`)
       .bind(accountId)
       .first<{ count: number; oldest: string | null }>(),
     db
@@ -246,7 +249,7 @@ export async function getRetentionSummary(db: D1Database, accountId: string, pla
                 error_message, started_at, completed_at
          FROM retention_runs
          WHERE account_id = ?
-         ORDER BY started_at DESC
+         ORDER BY datetime(started_at) DESC
          LIMIT 1`,
       )
       .bind(accountId)
