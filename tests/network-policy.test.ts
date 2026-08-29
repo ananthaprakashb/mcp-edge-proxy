@@ -6,6 +6,7 @@ import {
   validateResolvedNetworkTarget,
   type HostResolver,
 } from "../src/network-policy";
+import { validateUpstreamUrl } from "../src/security";
 
 describe("network SSRF policy", () => {
   it("blocks IPv4 private, loopback, link-local, CGNAT, metadata, benchmark, and reserved ranges", () => {
@@ -22,6 +23,17 @@ describe("network SSRF policy", () => {
       "255.255.255.255",
     ]) {
       expect(classifyIpAddress(address)?.public, address).toBe(false);
+    }
+  });
+
+  it("blocks non-canonical URL spellings of loopback IPv4", () => {
+    for (const url of [
+      "https://2130706433/mcp",
+      "https://0x7f000001/mcp",
+      "https://0177.0.0.1/mcp",
+      "https://127.1/mcp",
+    ]) {
+      expect(() => validateUpstreamUrl(url, false), url).toThrow();
     }
   });
 
