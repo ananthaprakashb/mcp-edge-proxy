@@ -17,7 +17,9 @@
       "CONTROL_PLANE_TOKEN",
       "UPSTREAM_ENCRYPTION_KEY",
       "BETTER_AUTH_SECRET",
-      "CAPABILITY_SIGNING_KEY"
+      "CAPABILITY_SIGNING_KEY",
+      "RESEND_API_KEY",
+      "AUTH_EMAIL_FROM"
     ]
   },
   "assets": {
