@@ -1,9 +1,11 @@
 import { handleAuditApi } from "./audit-api";
+import { createAuth } from "./auth";
 import { handleContextAccessApi } from "./context-access-api";
 import { handleContextApi } from "./context-api";
 import { handleGovernedContextMcp } from "./context-mcp";
 import { runScheduledGatewayHealthChecks } from "./gateway-health";
 import { handleHealthApi } from "./health-api";
+import { handlePasswordRecoveryApi } from "./password-recovery-api";
 import { runRetentionLifecycle } from "./retention";
 import worker from "./worker";
 import type { Env, ExecutionContextLike, ScheduledControllerLike } from "./types";
@@ -14,6 +16,16 @@ const HEALTH_CRON = "*/15 * * * *";
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
     const path = new URL(request.url).pathname;
+
+    if (path.startsWith("/api/auth/")) {
+      return createAuth(env, request, ctx).handler(request);
+    }
+
+    if (path.startsWith("/v1/app/password-recovery/")) {
+      const recoveryResponse = await handlePasswordRecoveryApi(request, env, ctx, path);
+      if (recoveryResponse) return recoveryResponse;
+    }
+
     if (path.startsWith("/v1/app/workspaces/")) {
       const accessResponse = await handleContextAccessApi(request, env, path);
       if (accessResponse) return accessResponse;

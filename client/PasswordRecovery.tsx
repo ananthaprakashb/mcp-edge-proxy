@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { authClient } from "./auth-client";
 import "./password-recovery.css";
 
@@ -9,30 +10,74 @@ function RecoveryShell({ children }: { children: React.ReactNode }) {
 
 export function ForgotPasswordEntry() {
   const { data: session, isPending } = authClient.useSession();
-  if (isPending || session?.user || window.location.pathname !== "/") return null;
-  return <a className="forgot-password-entry" href="/forgot-password">Forgot password?</a>;
+  const [formTarget, setFormTarget] = useState<HTMLFormElement | null>(null);
+
+  useEffect(() => {
+    if (isPending || session?.user || window.location.pathname !== "/") {
+      setFormTarget(null);
+      return;
+    }
+    const target = document.querySelector<HTMLFormElement>(".auth-card-v2 form");
+    setFormTarget(target);
+  }, [isPending, session?.user]);
+
+  if (isPending || session?.user || window.location.pathname !== "/" || !formTarget) return null;
+
+  return createPortal(
+    <div className="forgot-password-row"><a href="/forgot-password">Forgot password?</a></div>,
+    formTarget,
+  );
 }
 
 function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const [configured, setConfigured] = useState<boolean | null>(null);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    void fetch("/v1/app/password-recovery/status", { headers: { accept: "application/json" } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("status_failed");
+        const body = await response.json() as { configured?: boolean };
+        setConfigured(Boolean(body.configured));
+      })
+      .catch(() => setConfigured(null));
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
-    const result = await authClient.requestPasswordReset({
-      email,
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-    setBusy(false);
-    if (result.error) {
-      setError("Could not submit the reset request. Please try again.");
-      return;
+
+    try {
+      const response = await fetch("/v1/app/password-recovery/request", {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      if (response.status === 503) {
+        setConfigured(false);
+        setError("Password recovery email is not configured yet. Please contact the site administrator.");
+        return;
+      }
+
+      if (!response.ok) {
+        setError("Could not submit the reset request. Please try again.");
+        return;
+      }
+
+      setSent(true);
+    } catch {
+      setError("Could not reach the password recovery service. Please try again.");
+    } finally {
+      setBusy(false);
     }
-    setSent(true);
   }
 
   return <RecoveryShell>
@@ -43,10 +88,11 @@ function ForgotPasswordPage() {
       <a className="recovery-primary-link" href="/">Back to sign in</a>
     </> : <>
       <p>Enter the email address used for your ContextGateway account. For privacy, the response is the same whether or not the account exists.</p>
+      {configured === false && <div className="recovery-warning"><strong>Email recovery is not configured.</strong><span>Set the Resend Worker secrets before this flow can deliver reset links.</span></div>}
       <form onSubmit={submit}>
         <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required autoFocus /></label>
         {error && <div className="recovery-error">{error}</div>}
-        <button className="recovery-primary" disabled={busy}>{busy ? "Sending…" : "Send reset link"}</button>
+        <button className="recovery-primary" disabled={busy || configured === false}>{busy ? "Sending…" : "Send reset link"}</button>
       </form>
       <a className="recovery-secondary-link" href="/">Back to sign in</a>
     </>}
