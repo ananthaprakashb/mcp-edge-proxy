@@ -8,6 +8,8 @@ export interface PlanEntitlements {
   activeKeyLimit: number;
   memberLimit: number;
   monthlyRequestLimit: number;
+  traceRetentionDays: number;
+  auditRetentionDays: number;
 }
 
 const ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
@@ -19,6 +21,8 @@ const ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
     activeKeyLimit: 2,
     memberLimit: 1,
     monthlyRequestLimit: 10_000,
+    traceRetentionDays: 7,
+    auditRetentionDays: 30,
   },
   pro: {
     plan: "pro",
@@ -28,6 +32,8 @@ const ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
     activeKeyLimit: 25,
     memberLimit: 3,
     monthlyRequestLimit: 100_000,
+    traceRetentionDays: 30,
+    auditRetentionDays: 90,
   },
   team: {
     plan: "team",
@@ -37,6 +43,8 @@ const ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
     activeKeyLimit: 100,
     memberLimit: 15,
     monthlyRequestLimit: 1_000_000,
+    traceRetentionDays: 90,
+    auditRetentionDays: 365,
   },
 };
 
