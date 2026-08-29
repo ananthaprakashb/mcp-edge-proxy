@@ -106,9 +106,10 @@ export async function ensureAuditChainBackfilled(db: D1Database, accountId: stri
     if (!rows.length) return;
 
     const statements: D1PreparedStatement[] = [];
+    let nextHead = head;
     for (const row of rows) {
-      const sequence = head.sequence + 1;
-      const previousHash = head.hash;
+      const sequence = nextHead.sequence + 1;
+      const previousHash = nextHead.hash;
       const eventHash = await computeAuditEventHash(hashFields(row, sequence, previousHash));
       statements.push(
         db
@@ -119,9 +120,15 @@ export async function ensureAuditChainBackfilled(db: D1Database, accountId: stri
           )
           .bind(sequence, previousHash, eventHash, row.id),
       );
-      head = { sequence, hash: eventHash };
+      nextHead = { sequence, hash: eventHash };
     }
-    await db.batch(statements);
+    try {
+      await db.batch(statements);
+      head = nextHead;
+    } catch {
+      // Another request may have sealed the same legacy batch first. Re-read the head and continue.
+      head = await getHead(db, accountId);
+    }
   }
 }
 
