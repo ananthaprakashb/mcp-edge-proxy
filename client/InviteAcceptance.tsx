@@ -23,7 +23,10 @@ export function InviteAcceptance({ token, onAccepted, onCancel }: { token: strin
 
   useEffect(() => {
     setError("");
-    void api<InvitationPreview>(`/v1/app/invitations/${encodeURIComponent(token)}`)
+    void api<InvitationPreview>("/v1/app/invitations/preview", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    })
       .then(setPreview)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load invitation"));
   }, [token]);
@@ -31,10 +34,7 @@ export function InviteAcceptance({ token, onAccepted, onCancel }: { token: strin
   async function accept() {
     setBusy(true); setError("");
     try {
-      await api(`/v1/app/invitations/${encodeURIComponent(token)}/accept`, { method: "POST" });
-      const url = new URL(window.location.href);
-      url.searchParams.delete("invite");
-      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      await api("/v1/app/invitations/accept", { method: "POST", body: JSON.stringify({ token }) });
       await onAccepted();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not accept invitation");
