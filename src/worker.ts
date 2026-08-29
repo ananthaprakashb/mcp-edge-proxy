@@ -1,6 +1,7 @@
 import { handleAppApi } from "./app-api";
 import { createAuth } from "./auth";
 import { handleStripeWebhook } from "./billing-webhook";
+import { handleCollaborationApi } from "./collaboration-api";
 import edgeWorker from "./index";
 import type { Env, ExecutionContextLike } from "./types";
 
@@ -17,6 +18,8 @@ export default {
     }
 
     if (path.startsWith("/v1/app/")) {
+      const collaboration = await handleCollaborationApi(request, env, path);
+      if (collaboration) return collaboration;
       return handleAppApi(request, env, path);
     }
 
