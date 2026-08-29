@@ -1,4 +1,5 @@
 import { handleAuditApi } from "./audit-api";
+import { handleContextAccessApi } from "./context-access-api";
 import { handleContextApi } from "./context-api";
 import { handleGovernedContextMcp } from "./context-mcp";
 import { runScheduledGatewayHealthChecks } from "./gateway-health";
@@ -14,6 +15,8 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path.startsWith("/v1/app/workspaces/")) {
+      const accessResponse = await handleContextAccessApi(request, env, path);
+      if (accessResponse) return accessResponse;
       const contextResponse = await handleContextApi(request, env, path);
       if (contextResponse) return contextResponse;
       const healthResponse = await handleHealthApi(request, env, path);
