@@ -35,7 +35,7 @@ export interface GatewayHealthResult {
 }
 
 const PROBE_TIMEOUT_MS = 8_000;
-const SCHEDULED_BATCH_SIZE = 6;
+const SCHEDULED_BATCH_SIZE = 5;
 const MAX_HISTORY_PER_GATEWAY = 672;
 
 function tlsLikeError(error: unknown): boolean {
