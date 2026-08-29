@@ -39,8 +39,10 @@ export interface Env {
   PAID_RATE_LIMITER: RateLimit;
   CONTROL_PLANE_TOKEN: string;
   UPSTREAM_ENCRYPTION_KEY: string;
+  UPSTREAM_ENCRYPTION_KEYRING?: string;
   BETTER_AUTH_SECRET: string;
   CAPABILITY_SIGNING_KEY: string;
+  CAPABILITY_SIGNING_KEYRING?: string;
   BETTER_AUTH_URL?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
@@ -78,6 +80,8 @@ export interface GatewayRow {
   upstream_url: string;
   upstream_headers_ciphertext: string | null;
   upstream_headers_iv: string | null;
+  upstream_secret_version: number;
+  credentials_rotated_at: string | null;
   connection_mode: UpstreamConnectionMode;
   enabled: number;
 }
@@ -89,6 +93,7 @@ export interface ApiKeyAuthRow {
   allowed_methods: string;
   allowed_names: string;
   execution_mode: ExecutionMode;
+  secret_version?: number;
   plan: Plan;
   subscription_status: SubscriptionStatus;
 }
