@@ -11,6 +11,11 @@ type InvitationPreview = {
   };
 };
 
+function utcDate(value: string): Date {
+  if (value.endsWith("Z")) return new Date(value);
+  return new Date(`${value.replace(" ", "T")}Z`);
+}
+
 export function InviteAcceptance({ token, onAccepted, onCancel }: { token: string; onAccepted: () => Promise<void>; onCancel: () => void }) {
   const [preview, setPreview] = useState<InvitationPreview | null>(null);
   const [error, setError] = useState("");
@@ -40,7 +45,7 @@ export function InviteAcceptance({ token, onAccepted, onCancel }: { token: strin
     <section className="auth-copy"><div className="brand-mark">CG</div><p className="eyebrow">CONTEXTGATEWAY INVITATION</p><h1>Join a secured MCP workspace.</h1><p className="lede">The invitation is email-bound, expires after seven days, and grants only the workspace role shown here.</p></section>
     <section className="auth-card">
       <h2>{preview ? `Join ${preview.invitation.workspaceName}` : "Loading invitation…"}</h2>
-      {preview && <><p>Signed-in email: <strong>{preview.invitation.email}</strong></p><p>Role: <span className="badge good">{preview.invitation.role}</span></p><p className="fine-print">Expires {new Date(preview.invitation.expiresAt).toLocaleString()}.</p></>}
+      {preview && <><p>Signed-in email: <strong>{preview.invitation.email}</strong></p><p>Role: <span className="badge good">{preview.invitation.role}</span></p><p className="fine-print">Expires {utcDate(preview.invitation.expiresAt).toLocaleString()}.</p></>}
       {error && <div className="error-banner">{error}</div>}
       <div className="card-actions"><button onClick={onCancel}>Cancel</button><button className="primary" disabled={!preview || busy} onClick={accept}>{busy ? "Joining…" : "Accept invitation"}</button></div>
     </section>
