@@ -33,10 +33,25 @@ type Policy = {
   created_at: string;
 };
 
+type AccessRow = {
+  id: string;
+  document_version: number;
+  content_hash: string;
+  gateway_name: string;
+  api_key_name: string | null;
+  operation: "read" | "list";
+  requested_path: string | null;
+  decision: "allowed" | "denied";
+  reason: string;
+  capability_jti: string | null;
+  created_at: string;
+};
+
 type Props = { workspace: { id: string; role: WorkspaceRole } };
 
 function shortHash(value: string) { return `${value.slice(0, 12)}…`; }
 function parsePaths(value: string) { return value.split(",").map((item) => item.trim()).filter(Boolean); }
+function localTime(value: string) { return new Date(value.endsWith("Z") ? value : `${value.replace(" ", "T")}Z`).toLocaleString(); }
 
 export function ContextPanel({ workspace }: Props) {
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -48,10 +63,13 @@ export function ContextPanel({ workspace }: Props) {
   const [schemaName, setSchemaName] = useState("");
   const [schemaVersion, setSchemaVersion] = useState("");
   const [sourceLabel, setSourceLabel] = useState("");
+  const [effectiveAt, setEffectiveAt] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
   const [gatewayId, setGatewayId] = useState("");
   const [allowedPaths, setAllowedPaths] = useState("*");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [policies, setPolicies] = useState<Policy[]>([]);
+  const [access, setAccess] = useState<AccessRow[]>([]);
   const [validation, setValidation] = useState<string>("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -71,9 +89,13 @@ export function ContextPanel({ workspace }: Props) {
   useEffect(() => { void load().catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load governed context")); }, [load]);
 
   async function loadPolicies(key: string) {
-    const data = await api<{ policies: Policy[] }>(`/v1/app/workspaces/${workspace.id}/documents/${encodeURIComponent(key)}/policies`);
+    const [policyData, accessData] = await Promise.all([
+      api<{ policies: Policy[] }>(`/v1/app/workspaces/${workspace.id}/documents/${encodeURIComponent(key)}/policies`),
+      api<{ access: AccessRow[] }>(`/v1/app/workspaces/${workspace.id}/documents/${encodeURIComponent(key)}/access?limit=50`),
+    ]);
     setSelectedKey(key);
-    setPolicies(data.policies);
+    setPolicies(policyData.policies);
+    setAccess(accessData.access);
   }
 
   async function validate() {
@@ -100,6 +122,8 @@ export function ContextPanel({ workspace }: Props) {
           schemaName: schemaName || undefined,
           schemaVersion: schemaVersion || undefined,
           sourceLabel: sourceLabel || undefined,
+          effectiveAt: effectiveAt || undefined,
+          expiresAt: expiresAt || undefined,
           ...(gatewayId ? { policy: { gatewayId, allowedPaths: parsePaths(allowedPaths), allowedOperations: ["read", "list"] } } : {}),
         }),
       });
@@ -159,7 +183,7 @@ export function ContextPanel({ workspace }: Props) {
       <form onSubmit={ingest}>
         <div className="filters"><input placeholder="Document key · employee-handbook" value={documentKey} onChange={(e) => setDocumentKey(e.target.value)} required /><input placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} required /><select value={format} onChange={(e) => setFormat(e.target.value as DocumentFormat)}><option value="json">JSON</option><option value="yaml">YAML</option><option value="markdown">Markdown</option><option value="text">Text</option><option value="okf">OKF-style</option></select></div>
         <div className="filters"><input placeholder="Schema name · optional" value={schemaName} onChange={(e) => setSchemaName(e.target.value)} /><input placeholder="Schema version · optional" value={schemaVersion} onChange={(e) => setSchemaVersion(e.target.value)} /><input placeholder="Source / provenance label · optional" value={sourceLabel} onChange={(e) => setSourceLabel(e.target.value)} /></div>
-        <label>Load local text document<input type="file" accept=".json,.yaml,.yml,.md,.markdown,.txt,text/plain,application/json" onChange={(e) => void fileSelected(e)} /></label>
+        <div className="filters"><label>Effective at <input type="datetime-local" value={effectiveAt} onChange={(e) => setEffectiveAt(e.target.value)} /></label><label>Expires at <input type="datetime-local" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} /></label><label>Load local text document <input type="file" accept=".json,.yaml,.yml,.md,.markdown,.txt,text/plain,application/json" onChange={(e) => void fileSelected(e)} /></label></div>
         <label>Content<textarea rows={10} value={content} onChange={(e) => setContent(e.target.value)} required placeholder='{"public":{"message":"hello"},"private":{"secret":"not exposed"}}' /></label>
         <div className="filters"><select value={gatewayId} onChange={(e) => setGatewayId(e.target.value)}><option value="">No initial gateway policy</option>{gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}</select><input value={allowedPaths} onChange={(e) => setAllowedPaths(e.target.value)} placeholder="Allowed paths: * or /public/*" /><button type="button" onClick={() => void validate()}>Validate</button><button className="primary" disabled={busy}>{busy ? "Ingesting…" : "Ingest"}</button></div>
         {validation && <div className="success-banner">{validation}</div>}
@@ -168,14 +192,20 @@ export function ContextPanel({ workspace }: Props) {
 
     <div className="panel">
       <div className="panel-head"><div><h3>Documents</h3><p>Only metadata is shown here. Content is returned to agents only after capability and document-policy enforcement.</p></div></div>
-      {!documents.length ? <div className="table-empty">No governed context documents yet.</div> : <div className="table-wrap"><table><thead><tr><th>Document</th><th>Version</th><th>Format/schema</th><th>Provenance</th><th>Policies</th><th>Hash</th><th>Action</th></tr></thead><tbody>{documents.map((doc) => <tr key={doc.id}><td><strong>{doc.title}</strong><small>{doc.documentKey}</small></td><td>v{doc.version}</td><td>{doc.format}<small>{doc.schemaName ? `${doc.schemaName}${doc.schemaVersion ? ` · ${doc.schemaVersion}` : ""}` : "—"}</small></td><td>{doc.sourceLabel || "—"}<small>{doc.byteSize.toLocaleString()} bytes</small></td><td>{doc.policyCount}</td><td><code title={doc.contentHash}>{shortHash(doc.contentHash)}</code></td><td><button onClick={() => void loadPolicies(doc.documentKey)}>Policies</button></td></tr>)}</tbody></table></div>}
+      {!documents.length ? <div className="table-empty">No governed context documents yet.</div> : <div className="table-wrap"><table><thead><tr><th>Document</th><th>Version</th><th>Format/schema</th><th>Provenance</th><th>Validity</th><th>Policies</th><th>Hash</th><th>Action</th></tr></thead><tbody>{documents.map((doc) => <tr key={doc.id}><td><strong>{doc.title}</strong><small>{doc.documentKey}</small></td><td>v{doc.version}</td><td>{doc.format}<small>{doc.schemaName ? `${doc.schemaName}${doc.schemaVersion ? ` · ${doc.schemaVersion}` : ""}` : "—"}</small></td><td>{doc.sourceLabel || "—"}<small>{doc.byteSize.toLocaleString()} bytes</small></td><td><small>{doc.effectiveAt ? `from ${localTime(doc.effectiveAt)}` : "effective now"}</small><small>{doc.expiresAt ? `until ${localTime(doc.expiresAt)}` : "no expiry"}</small></td><td>{doc.policyCount}</td><td><code title={doc.contentHash}>{shortHash(doc.contentHash)}</code></td><td><button onClick={() => void loadPolicies(doc.documentKey)}>Policies & access</button></td></tr>)}</tbody></table></div>}
     </div>
 
-    {selectedKey && <div className="panel">
-      <div className="panel-head"><div><h3>Access policies · {selectedKey}</h3><p>Gateway-wide policies may be narrowed to exact JSON-pointer-style paths. The API also supports optional agent-key-specific policies.</p></div><button onClick={() => setSelectedKey(null)}>Close</button></div>
-      {manager && <form className="filters" onSubmit={grantPolicy}><select value={gatewayId} onChange={(e) => setGatewayId(e.target.value)} required>{gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}</select><input value={allowedPaths} onChange={(e) => setAllowedPaths(e.target.value)} placeholder="*, /public/*, /sections/benefits" /><button className="primary-subtle" disabled={busy}>Grant access</button></form>}
-      {!policies.length ? <div className="table-empty">No access policy. This document is fail-closed and cannot be retrieved by an agent.</div> : <div className="table-wrap"><table><thead><tr><th>Gateway</th><th>Agent key</th><th>Paths</th><th>Operations</th><th>Action</th></tr></thead><tbody>{policies.map((policy) => <tr key={policy.id}><td>{policy.gateway_id || "Any gateway"}</td><td>{policy.api_key_id || "Any key"}</td><td><code>{policy.allowed_paths_json}</code></td><td><code>{policy.allowed_operations_json}</code></td><td>{manager ? <button className="danger-link" onClick={() => void revokePolicy(policy.id)}>Revoke</button> : "—"}</td></tr>)}</tbody></table></div>}
-      <p className="fine-print">Agent keys must allow <code>tools/call</code> with names <code>contextgateway.document.list</code> and/or <code>contextgateway.document.read</code>. Reads additionally require an arguments-bound <code>cg_cap_*</code> capability.</p>
-    </div>}
+    {selectedKey && <>
+      <div className="panel">
+        <div className="panel-head"><div><h3>Access policies · {selectedKey}</h3><p>Gateway-wide policies may be narrowed to exact JSON-pointer-style paths. The API also supports optional agent-key-specific policies.</p></div><button onClick={() => setSelectedKey(null)}>Close</button></div>
+        {manager && <form className="filters" onSubmit={grantPolicy}><select value={gatewayId} onChange={(e) => setGatewayId(e.target.value)} required>{gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}</select><input value={allowedPaths} onChange={(e) => setAllowedPaths(e.target.value)} placeholder="*, /public/*, /sections/benefits" /><button className="primary-subtle" disabled={busy}>Grant access</button></form>}
+        {!policies.length ? <div className="table-empty">No access policy. This document is fail-closed and cannot be retrieved by an agent.</div> : <div className="table-wrap"><table><thead><tr><th>Gateway</th><th>Agent key</th><th>Paths</th><th>Operations</th><th>Action</th></tr></thead><tbody>{policies.map((policy) => <tr key={policy.id}><td>{policy.gateway_id || "Any gateway"}</td><td>{policy.api_key_id || "Any key"}</td><td><code>{policy.allowed_paths_json}</code></td><td><code>{policy.allowed_operations_json}</code></td><td>{manager ? <button className="danger-link" onClick={() => void revokePolicy(policy.id)}>Revoke</button> : "—"}</td></tr>)}</tbody></table></div>}
+        <p className="fine-print">Agent keys must allow <code>tools/call</code> with names <code>contextgateway.document.list</code> and/or <code>contextgateway.document.read</code>. Reads additionally require an arguments-bound <code>cg_cap_*</code> capability.</p>
+      </div>
+      <div className="panel">
+        <div className="panel-head"><div><h3>Recent document access</h3><p>Audit metadata only—no returned document content is stored in this log.</p></div><button onClick={() => void loadPolicies(selectedKey)}>Refresh</button></div>
+        {!access.length ? <div className="table-empty">No governed MCP access recorded for this document yet.</div> : <div className="table-wrap"><table><thead><tr><th>Decision</th><th>Operation/path</th><th>Gateway/key</th><th>Version/hash</th><th>Reason</th><th>Capability</th><th>Time</th></tr></thead><tbody>{access.map((row) => <tr key={row.id}><td><span className={`badge ${row.decision === "allowed" ? "good" : "bad"}`}>{row.decision}</span></td><td>{row.operation}<small>{row.requested_path || "full/list"}</small></td><td>{row.gateway_name}<small>{row.api_key_name || "—"}</small></td><td>v{row.document_version}<small><code>{shortHash(row.content_hash)}</code></small></td><td>{row.reason}</td><td><code>{row.capability_jti ? `${row.capability_jti.slice(0, 10)}…` : "—"}</code></td><td>{localTime(row.created_at)}</td></tr>)}</tbody></table></div>}
+      </div>
+    </>}
   </section>;
 }
