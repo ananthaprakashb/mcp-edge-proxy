@@ -62,6 +62,14 @@ async function readJsonObject(request: Request): Promise<Record<string, unknown>
   return body as Record<string, unknown>;
 }
 
+function requiredInviteToken(body: Record<string, unknown>): string {
+  const value = body.token;
+  if (typeof value !== "string" || !/^cginv_[A-Za-z0-9_-]{40,}$/.test(value)) {
+    throw new Error("A valid invitation token is required");
+  }
+  return value;
+}
+
 async function sessionUser(request: Request, env: Env): Promise<SessionUser | null> {
   const auth = createAuth(env, request);
   const session = await auth.api.getSession({ headers: request.headers });
@@ -89,7 +97,7 @@ async function expireInvites(env: Env, workspaceId?: string): Promise<void> {
       .prepare(
         `UPDATE workspace_invites
          SET status = 'expired', updated_at = datetime('now')
-         WHERE workspace_id = ? AND status = 'pending' AND expires_at <= datetime('now')`,
+         WHERE workspace_id = ? AND status = 'pending' AND datetime(expires_at) <= datetime('now')`,
       )
       .bind(workspaceId)
       .run();
@@ -99,7 +107,7 @@ async function expireInvites(env: Env, workspaceId?: string): Promise<void> {
     .prepare(
       `UPDATE workspace_invites
        SET status = 'expired', updated_at = datetime('now')
-       WHERE status = 'pending' AND expires_at <= datetime('now')`,
+       WHERE status = 'pending' AND datetime(expires_at) <= datetime('now')`,
     )
     .run();
 }
@@ -113,7 +121,7 @@ async function workspaceSeatUsage(env: Env, membership: MembershipContext) {
     .prepare(
       `SELECT COUNT(*) AS count
        FROM workspace_invites
-       WHERE workspace_id = ? AND status = 'pending' AND expires_at > datetime('now')`,
+       WHERE workspace_id = ? AND status = 'pending' AND datetime(expires_at) > datetime('now')`,
     )
     .bind(membership.workspace_id)
     .first<{ count: number }>();
@@ -147,7 +155,8 @@ async function lookupInviteByToken(env: Env, token: string): Promise<InviteRow |
 }
 
 function inviteExpired(invite: InviteRow): boolean {
-  const expires = Date.parse(invite.expires_at.endsWith("Z") ? invite.expires_at : `${invite.expires_at}Z`);
+  const normalized = invite.expires_at.includes("T") ? invite.expires_at : invite.expires_at.replace(" ", "T");
+  const expires = Date.parse(normalized.endsWith("Z") ? normalized : `${normalized}Z`);
   return Number.isFinite(expires) && expires <= Date.now();
 }
 
@@ -175,18 +184,18 @@ export async function handleCollaborationApi(request: Request, env: Env, path: s
   const memberMatch = /^\/v1\/app\/workspaces\/([^/]+)\/members\/([^/]+)$/.exec(path);
   const invitesMatch = /^\/v1\/app\/workspaces\/([^/]+)\/invites$/.exec(path);
   const inviteMatch = /^\/v1\/app\/workspaces\/([^/]+)\/invites\/([^/]+)$/.exec(path);
-  const acceptMatch = /^\/v1\/app\/invitations\/([^/]+)\/accept$/.exec(path);
-  const previewMatch = /^\/v1\/app\/invitations\/([^/]+)$/.exec(path);
+  const invitationPreview = path === "/v1/app/invitations/preview";
+  const invitationAccept = path === "/v1/app/invitations/accept";
 
-  if (!membersMatch && !memberMatch && !invitesMatch && !inviteMatch && !acceptMatch && !previewMatch) return null;
+  if (!membersMatch && !memberMatch && !invitesMatch && !inviteMatch && !invitationPreview && !invitationAccept) return null;
 
   try {
     const user = await sessionUser(request, env);
     if (!user) return errorResponse(401, "unauthorized", "Sign in is required");
 
-    if (previewMatch && request.method === "GET") {
-      const token = decodeURIComponent(previewMatch[1]);
-      const invite = await inviteForUser(env, token, user);
+    if (invitationPreview && request.method === "POST") {
+      const body = await readJsonObject(request);
+      const invite = await inviteForUser(env, requiredInviteToken(body), user);
       if (invite instanceof Response) return invite;
       return json({
         invitation: {
@@ -199,9 +208,9 @@ export async function handleCollaborationApi(request: Request, env: Env, path: s
       });
     }
 
-    if (acceptMatch && request.method === "POST") {
-      const token = decodeURIComponent(acceptMatch[1]);
-      const invite = await inviteForUser(env, token, user);
+    if (invitationAccept && request.method === "POST") {
+      const body = await readJsonObject(request);
+      const invite = await inviteForUser(env, requiredInviteToken(body), user);
       if (invite instanceof Response) return invite;
 
       const existing = await getMembership(env, invite.workspace_id, user.id);
@@ -232,18 +241,25 @@ export async function handleCollaborationApi(request: Request, env: Env, path: s
         return errorResponse(409, "plan_limit_reached", `${getPlanEntitlements(workspace.plan).displayName} allows ${seats.limit} workspace member${seats.limit === 1 ? "" : "s"}`);
       }
 
-      await env.DB.batch([
-        env.DB
-          .prepare(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)`)
-          .bind(invite.workspace_id, user.id, invite.role),
-        env.DB
-          .prepare(
-            `UPDATE workspace_invites
-             SET status = 'accepted', accepted_by_user_id = ?, accepted_at = datetime('now'), updated_at = datetime('now')
-             WHERE id = ? AND status = 'pending'`,
-          )
-          .bind(user.id, invite.id),
-      ]);
+      try {
+        await env.DB.batch([
+          env.DB
+            .prepare(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)`)
+            .bind(invite.workspace_id, user.id, invite.role),
+          env.DB
+            .prepare(
+              `UPDATE workspace_invites
+               SET status = 'accepted', accepted_by_user_id = ?, accepted_at = datetime('now'), updated_at = datetime('now')
+               WHERE id = ? AND status = 'pending'`,
+            )
+            .bind(user.id, invite.id),
+        ]);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("workspace_member_plan_limit")) {
+          return errorResponse(409, "plan_limit_reached", "The workspace member limit was reached before this invitation could be accepted");
+        }
+        throw error;
+      }
 
       return json({ workspaceId: invite.workspace_id, workspaceName: invite.workspace_name, role: invite.role }, 201);
     }
@@ -344,7 +360,7 @@ export async function handleCollaborationApi(request: Request, env: Env, path: s
             role,
             status: "pending",
             expiresAt,
-            inviteUrl: `${origin}/?invite=${encodeURIComponent(token)}`,
+            inviteUrl: `${origin}/#invite=${encodeURIComponent(token)}`,
           },
           seats: await workspaceSeatUsage(env, membership),
           warning: "The invite URL is returned only at creation time; ContextGateway stores only its SHA-256 token hash.",
