@@ -74,6 +74,9 @@ export async function listWorkspaceGateways(db: D1Database, accountId: string): 
     .prepare(
       `SELECT g.id, g.name, g.upstream_url, g.connection_mode, g.enabled, g.created_at,
               g.upstream_secret_version, g.credentials_rotated_at,
+              g.health_status, g.health_reason, g.last_health_checked_at,
+              g.last_health_success_at, g.last_health_failure_at, g.last_health_latency_ms,
+              g.last_health_http_status, g.consecutive_health_failures,
               COUNT(k.id) AS key_count,
               SUM(CASE WHEN k.revoked_at IS NULL THEN 1 ELSE 0 END) AS active_key_count
        FROM gateways g
