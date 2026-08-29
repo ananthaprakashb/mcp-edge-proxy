@@ -5,6 +5,7 @@ import { PasswordRecoveryRouter } from "./PasswordRecovery";
 import "./styles.css";
 import "./styles-v2.css";
 import "./auth-polish.css";
+import "./brand.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
