@@ -161,7 +161,7 @@ function AuthScreen({ config }: { config: Config | null }) {
   }
 
   async function social(provider: "github" | "google") {
-    await authClient.signIn.social({ provider, callbackURL: `${window.location.pathname}${window.location.search}` });
+    await authClient.signIn.social({ provider, callbackURL: `${window.location.pathname}${window.location.search}${window.location.hash}` });
   }
 
   return (
@@ -426,7 +426,7 @@ export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [error, setError] = useState("");
-  const [inviteToken, setInviteToken] = useState<string | null>(() => new URLSearchParams(window.location.search).get("invite"));
+  const [inviteToken, setInviteToken] = useState<string | null>(() => new URLSearchParams(window.location.hash.replace(/^#/, "")).get("invite"));
 
   const refreshBootstrap = useCallback(async () => {
     const data = await api<Bootstrap>("/v1/app/bootstrap");
@@ -435,7 +435,9 @@ export default function App() {
 
   function cancelInvite() {
     const url = new URL(window.location.href);
-    url.searchParams.delete("invite");
+    const hash = new URLSearchParams(url.hash.replace(/^#/, ""));
+    hash.delete("invite");
+    url.hash = hash.toString() ? `#${hash.toString()}` : "";
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     setInviteToken(null);
   }
@@ -447,7 +449,7 @@ export default function App() {
   if (!session?.user) return <AuthScreen config={config} />;
   if (error) return <div className="loading-screen"><div className="error-banner">{error}</div></div>;
   if (!bootstrap) return <div className="loading-screen"><div className="brand-mark">CG</div><span>Loading workspace…</span></div>;
-  if (inviteToken) return <InviteAcceptance token={inviteToken} onAccepted={async () => { setInviteToken(null); await refreshBootstrap(); }} onCancel={cancelInvite} />;
+  if (inviteToken) return <InviteAcceptance token={inviteToken} onAccepted={async () => { cancelInvite(); await refreshBootstrap(); }} onCancel={cancelInvite} />;
   if (!bootstrap.workspaces.length) return <EmptyWorkspace onCreated={refreshBootstrap} />;
   return <Dashboard bootstrap={bootstrap} />;
 }
