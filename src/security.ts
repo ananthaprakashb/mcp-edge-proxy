@@ -1,3 +1,5 @@
+import { assertStaticNetworkTarget } from "./network-policy";
+
 const FORBIDDEN_UPSTREAM_HEADERS = new Set([
   "connection",
   "content-length",
@@ -17,40 +19,13 @@ const STRIPPED_CALLER_HEADERS = [
   "x-contextgateway-control-token",
 ];
 
-function isPrivateIpv4(hostname: string): boolean {
-  const parts = hostname.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = parts;
-  return (
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    a === 0
-  );
-}
-
 export function validateUpstreamUrl(value: string, allowInsecure: boolean): URL {
   const url = new URL(value);
   if (url.username || url.password) throw new Error("Upstream URLs must not contain embedded credentials");
   if (url.protocol !== "https:" && !(allowInsecure && url.protocol === "http:")) {
     throw new Error("Upstream URLs must use HTTPS");
   }
-
-  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname === "::1" ||
-    hostname === "metadata.google.internal" ||
-    hostname === "169.254.169.254" ||
-    isPrivateIpv4(hostname)
-  ) {
-    throw new Error("Direct loopback, link-local, and private-network upstreams are blocked; use a secure tunnel hostname");
-  }
+  assertStaticNetworkTarget(url.hostname);
   return url;
 }
 
