@@ -1,4 +1,6 @@
+import { waitUntil } from "cloudflare:workers";
 import { betterAuth } from "better-auth";
+import { passwordResetEmailConfigured, sendPasswordResetEmail } from "./email";
 import type { Env } from "./types";
 
 export function authProviderAvailability(env: Env): { github: boolean; google: boolean } {
@@ -19,6 +21,19 @@ export function createAuth(env: Env, request: Request) {
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 12,
+      resetPasswordTokenExpiresIn: 30 * 60,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: async ({ user, url }) => {
+        if (!passwordResetEmailConfigured(env)) {
+          console.error("ContextGateway password reset email delivery is not configured");
+          return;
+        }
+        waitUntil(
+          sendPasswordResetEmail(env, user.email, url).catch(() => {
+            console.error("ContextGateway password reset email delivery failed");
+          }),
+        );
+      },
     },
     socialProviders: {
       ...(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
