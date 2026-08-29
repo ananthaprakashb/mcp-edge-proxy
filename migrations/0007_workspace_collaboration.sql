@@ -36,8 +36,35 @@ BEGIN
   WHERE id = NEW.id;
 END;
 
--- API checks reserve pending seats. This trigger is the final race-safe guardrail that prevents
--- the actual member count from ever exceeding the plan limit, including after a plan downgrade.
+-- Reserve pending seats at the database boundary too, so concurrent invite creation cannot
+-- exceed the plan before the API has a chance to observe the other request.
+CREATE TRIGGER IF NOT EXISTS enforce_workspace_invite_plan_limit
+BEFORE INSERT ON workspace_invites
+FOR EACH ROW
+WHEN NEW.status = 'pending' AND (
+  (SELECT COUNT(*) FROM workspace_members WHERE workspace_id = NEW.workspace_id)
+  +
+  (SELECT COUNT(*) FROM workspace_invites
+   WHERE workspace_id = NEW.workspace_id
+     AND status = 'pending'
+     AND datetime(expires_at) > datetime('now'))
+) >= COALESCE((
+  SELECT CASE a.plan
+    WHEN 'free' THEN 1
+    WHEN 'pro' THEN 3
+    WHEN 'team' THEN 15
+    ELSE 1
+  END
+  FROM workspaces w
+  JOIN accounts a ON a.id = w.account_id
+  WHERE w.id = NEW.workspace_id
+), 1)
+BEGIN
+  SELECT RAISE(ABORT, 'workspace_invite_plan_limit');
+END;
+
+-- API checks the limit before acceptance. This trigger is the final race-safe guardrail that
+-- prevents the actual member count from exceeding the plan, including after a downgrade.
 CREATE TRIGGER IF NOT EXISTS enforce_workspace_member_plan_limit
 BEFORE INSERT ON workspace_members
 FOR EACH ROW
