@@ -76,8 +76,6 @@ function hashFields(row: AuditRow, sequence: number, previousHash: string | null
   return {
     id: row.id,
     accountId: row.account_id,
-    workspaceId: row.workspace_id,
-    actorUserId: row.actor_user_id,
     eventType: row.event_type,
     targetType: row.target_type,
     targetId: row.target_id,
@@ -145,8 +143,6 @@ export async function appendSecurityEvent(db: D1Database, event: SecurityEventIn
     const eventHash = await computeAuditEventHash({
       id,
       accountId: event.accountId,
-      workspaceId: event.workspaceId ?? null,
-      actorUserId: event.actorUserId ?? null,
       eventType: event.eventType,
       targetType: event.targetType,
       targetId: event.targetId,
