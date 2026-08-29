@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">ContextGateway</title>
+  <desc id="desc">A secure glowing gateway with a shield and G monogram.</desc>
+  <defs>
+    <linearGradient id="frame" x1="42" y1="24" x2="212" y2="218" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#23d7ff"/>
+      <stop offset="0.52" stop-color="#2379f4"/>
+      <stop offset="1" stop-color="#6d45ff"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="92" y1="78" x2="164" y2="196" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#64fff1"/>
+      <stop offset="1" stop-color="#13bde8"/>
+    </linearGradient>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientTransform="translate(128 116) rotate(90) scale(140)">
+      <stop stop-color="#10263d"/>
+      <stop offset="0.62" stop-color="#071421"/>
+      <stop offset="1" stop-color="#03080f"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#bg)" stroke="#18334d" stroke-width="3"/>
+
+  <path d="M48 190V101C48 54 83 27 128 27s80 27 80 74v89" fill="none" stroke="url(#frame)" stroke-width="16" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M61 187V104c0-38 29-64 67-64s67 26 67 64v83" fill="none" stroke="#0c2741" stroke-width="8" opacity=".95"/>
+
+  <g stroke="url(#cyan)" stroke-width="7" stroke-linecap="round" filter="url(#glow)">
+    <path d="M128 62v61"/>
+    <path d="M91 84v31c0 13 6 22 19 30"/>
+    <path d="M165 84v31c0 13-6 22-19 30"/>
+  </g>
+  <g fill="#58fff0" filter="url(#glow)">
+    <circle cx="128" cy="59" r="8"/>
+    <circle cx="91" cy="81" r="7"/>
+    <circle cx="165" cy="81" r="7"/>
+  </g>
+
+  <path d="M128 116 174 139v43c0 28-19 45-46 55-27-10-46-27-46-55v-43l46-23Z" fill="#071827" stroke="url(#cyan)" stroke-width="7" stroke-linejoin="round" filter="url(#glow)"/>
+  <path d="M151 166c-5-9-13-14-24-14-18 0-31 13-31 31s13 31 31 31c10 0 18-3 24-10v-18h-25v-12h39v36c-10 12-23 17-39 17-26 0-44-18-44-44s19-44 45-44c17 0 30 7 39 20l-15 7Z" fill="url(#cyan)" transform="translate(0 -7) scale(.92) translate(11 14)"/>
+
+  <path d="M41 211c24-12 52-18 87-18 36 0 65 6 88 18" fill="none" stroke="#1fcde6" stroke-width="3" opacity=".55"/>
+</svg>

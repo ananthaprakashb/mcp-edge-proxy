@@ -10,23 +10,54 @@ function RecoveryShell({ children }: { children: React.ReactNode }) {
 
 export function ForgotPasswordEntry() {
   const { data: session, isPending } = authClient.useSession();
-  const [formTarget, setFormTarget] = useState<HTMLFormElement | null>(null);
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (isPending || session?.user || window.location.pathname !== "/") {
-      setFormTarget(null);
+      setHost(null);
       return;
     }
-    const target = document.querySelector<HTMLFormElement>(".auth-card-v2 form");
-    setFormTarget(target);
+
+    const card = document.querySelector<HTMLElement>(".auth-card-v2");
+    if (!card) return;
+
+    const syncPlacement = () => {
+      const activeTab = card.querySelector<HTMLButtonElement>(".mode-tabs button.active");
+      const form = card.querySelector<HTMLFormElement>("form");
+      const password = form?.querySelector<HTMLInputElement>('input[type="password"]');
+      const passwordLabel = password?.closest("label");
+      const existingHost = form?.querySelector<HTMLDivElement>(".forgot-password-host") ?? null;
+      const signingIn = activeTab?.textContent?.trim() === "Sign in";
+
+      if (!signingIn || !form || !passwordLabel) {
+        existingHost?.remove();
+        setHost(null);
+        return;
+      }
+
+      if (existingHost) {
+        setHost(existingHost);
+        return;
+      }
+
+      const nextHost = document.createElement("div");
+      nextHost.className = "forgot-password-host";
+      passwordLabel.insertAdjacentElement("afterend", nextHost);
+      setHost(nextHost);
+    };
+
+    syncPlacement();
+    const observer = new MutationObserver(syncPlacement);
+    observer.observe(card, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+
+    return () => {
+      observer.disconnect();
+      card.querySelector(".forgot-password-host")?.remove();
+    };
   }, [isPending, session?.user]);
 
-  if (isPending || session?.user || window.location.pathname !== "/" || !formTarget) return null;
-
-  return createPortal(
-    <div className="forgot-password-row"><a href="/forgot-password">Forgot password?</a></div>,
-    formTarget,
-  );
+  if (isPending || session?.user || window.location.pathname !== "/" || !host) return null;
+  return createPortal(<a className="forgot-password-link" href="/forgot-password">Forgot password?</a>, host);
 }
 
 function ForgotPasswordPage() {

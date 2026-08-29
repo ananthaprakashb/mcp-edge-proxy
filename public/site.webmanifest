@@ -1,0 +1,17 @@
+{
+  "name": "ContextGateway",
+  "short_name": "ContextGateway",
+  "description": "Secure MCP gateway for agentic workflows with least-privilege access, credential isolation, governed context, and privacy-safe observability.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#071019",
+  "theme_color": "#071019",
+  "icons": [
+    {
+      "src": "/contextgateway-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

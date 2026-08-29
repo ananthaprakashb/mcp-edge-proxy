@@ -1,0 +1,362 @@
+/* Focused typography + spacing polish for authentication and password recovery. */
+.auth-shell-v2,
+.recovery-shell {
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-optical-sizing: auto;
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+}
+
+.auth-shell-v2 {
+  grid-template-columns: minmax(0, 1.12fr) minmax(460px, .88fr);
+}
+
+.auth-story {
+  padding: clamp(42px, 6vw, 84px);
+}
+
+.auth-message {
+  max-width: 760px;
+  margin: clamp(56px, 8vh, 88px) 0;
+}
+
+.auth-message h1 {
+  max-width: 820px;
+  margin: 14px 0 24px;
+  font-size: clamp(44px, 5.4vw, 72px);
+  line-height: 1.01;
+  letter-spacing: -.048em;
+  font-weight: 720;
+}
+
+.auth-message p {
+  max-width: 660px;
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.72;
+  letter-spacing: -.006em;
+}
+
+.auth-proof-grid {
+  gap: 24px;
+  padding-top: 24px;
+}
+
+.auth-proof-grid strong {
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 680;
+}
+
+.auth-proof-grid span {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.auth-panel {
+  padding: clamp(32px, 5vw, 72px);
+}
+
+.auth-card-v2 {
+  width: min(468px, 100%);
+  padding: 36px 38px 34px;
+  border: 1px solid rgba(65, 101, 128, .34);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(14, 29, 43, .82), rgba(8, 20, 31, .9));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, .24);
+  backdrop-filter: blur(14px);
+}
+
+.auth-card-v2 .kicker,
+.recovery-kicker {
+  margin-bottom: 11px;
+  font-size: 10.5px;
+  letter-spacing: .145em;
+}
+
+.auth-card-v2 h2 {
+  margin: 0 0 12px;
+  font-size: 31px;
+  line-height: 1.12;
+  letter-spacing: -.037em;
+  font-weight: 700;
+}
+
+.auth-card-v2 > p {
+  margin: 0 0 28px;
+  color: #94a8bb;
+  font-size: 14px;
+  line-height: 1.68;
+}
+
+.auth-card-v2 .mode-tabs {
+  margin-bottom: 24px;
+  padding: 5px;
+  border-radius: 13px;
+}
+
+.auth-card-v2 .mode-tabs button {
+  min-height: 40px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.auth-card-v2 form {
+  gap: 18px;
+}
+
+.auth-card-v2 label,
+.recovery-card label {
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  font-weight: 650;
+  letter-spacing: .004em;
+}
+
+.auth-card-v2 input,
+.recovery-card input {
+  min-height: 50px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.forgot-password-host {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 18px;
+  margin-top: -8px;
+}
+
+.forgot-password-link {
+  color: #86cfff;
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.forgot-password-link:hover {
+  color: #c2e8ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-card-v2 .primary.wide,
+.recovery-primary,
+.recovery-primary-link {
+  min-height: 50px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.005em;
+}
+
+.auth-card-v2 .divider {
+  margin: 25px 0 22px;
+}
+
+.auth-card-v2 .social-row {
+  gap: 12px;
+}
+
+.auth-card-v2 .social-row button {
+  min-height: 46px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.auth-card-v2 .fine-print {
+  margin: 25px 0 0;
+  font-size: 10.5px;
+  line-height: 1.65;
+}
+
+.recovery-shell {
+  padding: 32px 20px;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(54, 141, 205, .18), transparent 34%),
+    radial-gradient(circle at 82% 88%, rgba(46, 200, 183, .08), transparent 34%),
+    #071019;
+  color: #edf6ff;
+}
+
+.recovery-card {
+  width: min(100%, 500px);
+  padding: 38px 40px 36px;
+  border: 1px solid #1f3a4f;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #0e1d2b, #091520);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .28);
+}
+
+.recovery-brand {
+  margin-bottom: 34px;
+  color: #eef7ff;
+  font-size: 16px;
+  line-height: 1;
+  font-weight: 760;
+  letter-spacing: -.025em;
+}
+
+.recovery-kicker {
+  color: #79c7f6;
+}
+
+.recovery-card h1 {
+  margin: 0 0 13px;
+  color: #f3f8fd;
+  font-size: 32px;
+  line-height: 1.12;
+  letter-spacing: -.038em;
+  font-weight: 700;
+}
+
+.recovery-card > p {
+  margin: 0 0 27px;
+  color: #93a9bc;
+  font-size: 14px;
+  line-height: 1.72;
+}
+
+.recovery-card form {
+  gap: 18px;
+}
+
+.recovery-card label {
+  color: #b1c2d0;
+}
+
+.recovery-card input {
+  border-color: #29445b;
+  background: #06111c;
+  color: #f1f7fd;
+}
+
+.recovery-card input:focus {
+  border-color: #4d9fe4;
+  box-shadow: 0 0 0 3px rgba(22, 132, 213, .16);
+}
+
+.recovery-primary,
+.recovery-primary-link {
+  background: linear-gradient(180deg, #258fd6, #166fae);
+  border: 1px solid #56b3ec;
+  color: #fff;
+}
+
+.recovery-secondary-link {
+  margin-top: 22px;
+  color: #93adc1;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.recovery-secondary-link:hover {
+  color: #d8ecfa;
+}
+
+.recovery-success,
+.recovery-error,
+.recovery-warning {
+  margin: 22px 0;
+  padding: 16px 17px;
+  border-radius: 13px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.recovery-success {
+  border-color: #236654;
+  background: #0d2a23;
+  color: #9be6c5;
+}
+
+.recovery-error {
+  border-color: #7b3443;
+  background: #351620;
+  color: #ffb0be;
+}
+
+.recovery-warning {
+  border-color: #6f5930;
+  background: #2b2414;
+  color: #f0d38d;
+}
+
+.recovery-warning strong,
+.recovery-warning span {
+  display: block;
+}
+
+.recovery-warning span {
+  margin-top: 4px;
+  color: #cbb77d;
+}
+
+@media (max-width: 980px) {
+  .auth-shell-v2 {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-story {
+    min-height: auto;
+    padding-bottom: 34px;
+  }
+
+  .auth-message {
+    margin: 48px 0;
+  }
+
+  .auth-panel {
+    padding-top: 0;
+    padding-bottom: 48px;
+  }
+}
+
+@media (max-width: 620px) {
+  .auth-story {
+    padding: 28px 22px 30px;
+  }
+
+  .auth-message {
+    margin: 38px 0 42px;
+  }
+
+  .auth-message h1 {
+    font-size: 40px;
+    line-height: 1.03;
+  }
+
+  .auth-message p {
+    font-size: 15px;
+  }
+
+  .auth-proof-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .auth-panel {
+    padding: 0 16px 28px;
+  }
+
+  .auth-card-v2,
+  .recovery-card {
+    padding: 28px 22px 26px;
+    border-radius: 18px;
+  }
+
+  .auth-card-v2 h2,
+  .recovery-card h1 {
+    font-size: 27px;
+  }
+
+  .recovery-shell {
+    padding: 16px;
+  }
+}
