@@ -46,14 +46,14 @@ describe("retention policy", () => {
 });
 
 describe("audit export", () => {
-  it("quotes commas quotes and newlines in CSV", () => {
+  it("quotes CSV content and neutralizes spreadsheet formulas", () => {
     const csv = auditEventsCsv([{
       id: "evt-1",
       event_type: "test,event",
       actor_name: 'A "User"',
       actor_email: "a@example.com",
       target_type: "gateway",
-      target_id: "gw-1",
+      target_id: "=HYPERLINK(\"https://example.invalid\")",
       metadata_json: "{\n\"ok\":true\n}",
       chain_sequence: 1,
       previous_hash: null,
@@ -63,5 +63,6 @@ describe("audit export", () => {
     expect(csv).toContain('"test,event"');
     expect(csv).toContain('"A ""User"""');
     expect(csv).toContain('"{\n""ok"":true\n}"');
+    expect(csv).toContain("'=HYPERLINK");
   });
 });
